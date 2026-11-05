@@ -15,12 +15,17 @@ import java.util.Set;
 /**
  * 原生「看过」本地历史：SharedPreferences 里存一段 JSON（org.json 是框架自带，不引库）。
  * 上限 50 条、最新在前、按 videoId 去重。NavHelper 在点播出口写入，
- * NativeHistoryActivity 读取展示；另含一次性迁移桥的落点（并入站点 WebView
- * localStorage 里的旧 playHistory）与「已迁移」标记。
+ * NativeHistoryActivity 读取展示。
  *
- * 迁移标记用 v2 键：v1 逻辑有个实测踩到的缺陷——首次打开历史页之前只要
- * 有过任何一次原生点播，就会误标「已迁移」而永不真正读旧数据（2026-11-04
- * 真机验收发现）。v2 不认 v1 标记，被误伤的设备升级后会重新尝试一次。
+ * 本文件后半段的 mergeMigrated / isMigrated / markMigrated /
+ * noteNullMigrationRead 是一次性迁移桥（曾并入站点 WebView localStorage
+ * 里的旧 playHistory）的落点：桥的读取侧已在分包时删除，这组 API 全仓
+ * 已无调用方，存量历史现靠装机时播种；仅因已装设备的 prefs 里可能还
+ * 留着迁移标记键而暂存，勿据此以为迁移机制还在运行。
+ *
+ * 迁移标记用 v2 键的历史原因：v1 逻辑有个实测踩到的缺陷——首次打开
+ * 历史页之前只要有过任何一次原生点播，就会误标「已迁移」而永不真正
+ * 读旧数据（2026-11-04 真机验收发现）。v2 不认 v1 标记。
  */
 public final class HistoryStore {
 
@@ -73,6 +78,7 @@ public final class HistoryStore {
     }
 
     /**
+     * （迁移桥落点，已无调用方，见类注释）
      * 并入迁移桥读来的站点旧历史：本地已有同 videoId 的记录优先（更新、带海报），
      * 其余按旧记录的时间戳合并排序后截断。返回新并入的条数。
      */
@@ -110,6 +116,7 @@ public final class HistoryStore {
     }
 
     /**
+     * （迁移桥落点，已无调用方，见类注释）
      * 记一次「迁移桥读到 null」（key 不存在或临时 WebView 没看见主存储）。
      * 一次读空不可信：累计 3 次都读空才返回 true，调用方据此放弃并标记完成，
      * 免得原生-only 用户每次打开历史页都白跑一遍桥。

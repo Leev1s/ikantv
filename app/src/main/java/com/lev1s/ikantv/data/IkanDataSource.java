@@ -8,7 +8,7 @@ import java.util.List;
 /**
  * 原生浏览层的数据入口（同步调用，请在后台线程使用）。
  * 每个方法 = 一次 HTML 请求 + 解析；解析出 0 条目按 PARSE_EMPTY 抛出，
- * 让 UI 层能明确降级到 WebView 原站模式，而不是展示空白页。
+ * 让 UI 层能按失败类型在应用内给出提示与重试，而不是展示空白页。
  */
 public final class IkanDataSource {
 

@@ -45,11 +45,14 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * 原生播放器：针对这台 Amlogic 盒子（Android 9）用 ijkplayer（ffmpeg 内核）播 HLS——
+ * 原生播放器：针对这台 Amlogic 盒子（Android 9）用 libVLC 内核播 HLS——
  * 支持站点常见的 AES-128 加密 HLS（系统 MediaPlayer 不支持、会直接报错），
  * 解复用容错也远好于 WebView 的 MSE；视频走 MediaCodec 硬解。
- * 数据（选集 × 线路 × m3u8）通过一个隐藏 WebView 在站点页面上下文里调
- * /api/getResN 拿回来——令牌和 Cloudflare 校验都由页面自己处理，壳只消费结果。
+ * 数据（选集 × 线路 × m3u8）优先原生直取：在本地算出令牌、两次普通
+ * HTTPS 请求调 /api/getResN 拿到（见 fetchLinesNative）；直取失败
+ * （字段缺失 / Cloudflare 校验页 / 站点改了令牌算法）才回退到应用内
+ * 隐藏 WebView 路线——在站点页面上下文里调同一 API，令牌和校验都
+ * 由页面自己处理，壳只消费结果。
  *
  * 遥控键位（极简）：
  *   OK = 播放/暂停（长按切换倍速）  ◀ ▶ = 快退/快进 30 秒（连按加速）
@@ -275,21 +278,30 @@ public class PlayerActivity extends Activity {
             c.setReadTimeout(9000);
             c.setRequestProperty("User-Agent", DESKTOP_UA);
             if (referer != null) c.setRequestProperty("Referer", referer);
-            if (c.getResponseCode() != 200) return null;
+            if (c.getResponseCode() != 200) {
+                java.io.InputStream es = c.getErrorStream();
+                if (es != null) {
+                    try { es.close(); } catch (Exception ignored) { }
+                }
+                return null;
+            }
             java.io.InputStream is = c.getInputStream();
             java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
             byte[] buf = new byte[16384];
             int n, total = 0;
-            while ((n = is.read(buf)) > 0) {
-                bos.write(buf, 0, n);
-                total += n;
-                if (total > 600_000) break;
+            try {
+                while ((n = is.read(buf)) > 0) {
+                    bos.write(buf, 0, n);
+                    total += n;
+                    if (total > 600_000) break;
+                }
+            } finally {
+                // 读尽并关闭流后连接可回池复用，不要 disconnect（会销毁连接）
+                is.close();
             }
             return bos.toString("UTF-8");
         } catch (Exception e) {
             return null;
-        } finally {
-            if (c != null) c.disconnect();
         }
     }
 
@@ -708,7 +720,7 @@ public class PlayerActivity extends Activity {
                         }
                         in.close();
                     }
-                    c.disconnect();
+                    // 流已关闭，连接由平台连接池回收；不再 disconnect 销毁它
                 } catch (Exception e) {
                     result = -1;
                 }

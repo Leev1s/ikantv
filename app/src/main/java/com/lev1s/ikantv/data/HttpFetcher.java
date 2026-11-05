@@ -62,9 +62,9 @@ public final class HttpFetcher {
         } catch (Exception e) {
             throw new FetchException(FetchException.Kind.NETWORK,
                     e.getClass().getSimpleName() + ": " + e.getMessage());
-        } finally {
-            if (c != null) c.disconnect();
         }
+        // 注意不要 disconnect()：响应流读尽并关闭后，连接会被平台连接池
+        // 回收复用（keep-alive）；disconnect 会把可复用的连接直接销毁。
     }
 
     /** Cloudflare 挑战页特征：标题 Just a moment / 挑战脚本域名 / 校验文案。 */
@@ -109,6 +109,9 @@ public final class HttpFetcher {
             return readAll(is);
         } catch (Exception e) {
             return null;
+        } finally {
+            // 错误流也要关闭：读尽并关闭后连接才能回池（或被实现干净回收）
+            try { is.close(); } catch (Exception ignored) { }
         }
     }
 }
