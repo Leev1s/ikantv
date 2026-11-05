@@ -1,0 +1,196 @@
+/* === 爱看电视 TV 模式样式：大焦点、大字、深色、少干扰 === */
+html.tv-mode *:focus {
+  outline: 5px solid #FFB300 !important;
+  outline-offset: 3px !important;
+  box-shadow: 0 0 0 8px rgba(255,179,0,.35), 0 10px 28px rgba(0,0,0,.55) !important;
+}
+/* 类名式焦点（老内核 WebView 不画 outline 时靠这个） */
+html.tv-mode .tv-focused {
+  outline: 5px solid #FFB300 !important;
+  outline-offset: 3px !important;
+  box-shadow: 0 0 0 8px rgba(255,179,0,.40), 0 10px 28px rgba(0,0,0,.6) !important;
+  background-color: rgba(255,179,0,.16) !important;
+  border-radius: 8px;
+}
+html.tv-mode .item.tv-focused { transform: scale(1.03); }
+/* ===== 深色主题 ===== */
+html.tv-mode body { background: #101216 !important; color: #D7DAE0 !important; }
+html.tv-mode .container, html.tv-mode .row { background: transparent !important; }
+html.tv-mode .jumbotron { background: #16181D !important; color: #E8EAED !important; }
+html.tv-mode h1, html.tv-mode h2, html.tv-mode h3, html.tv-mode h4,
+html.tv-mode .item .title, html.tv-mode .item .title a { color: #E8EAED !important; }
+html.tv-mode a { color: #9EC1FF; }
+html.tv-mode hr { border-color: #262A31 !important; }
+html.tv-mode .navbar { background: #16181D !important; border-color: #262A31 !important; }
+html.tv-mode .navbar a, html.tv-mode .nav a { color: #E8EAED !important; }
+html.tv-mode .nav-pills > li.active > a { background: #FFB300 !important; color: #111 !important; }
+html.tv-mode .index.search .input_text {
+  background: #1D2026 !important; color: #FFF !important; border-color: #333842 !important;
+}
+html.tv-mode .index.search .btn_submit { background: #2A2E37 !important; color: #FFF !important; }
+html.tv-mode .article-list, html.tv-mode .list-group-item {
+  background: #16181D !important; color: #D7DAE0 !important; border-color: #262A31 !important;
+}
+html.tv-mode .item a:focus img,
+html.tv-mode a:focus img {
+  transform: scale(1.04);
+  transition: transform .15s ease;
+}
+/* 海报格子：6 个一行（用户反馈 4 个太大），标题随之收一号 */
+@media (min-width: 768px) {
+  html.tv-mode .row div.item { width: 16.666% !important; }
+/* 注意：上面这条只能打在列 div 上——选择器若同时命中卡片锚点 a.item，
+   锚点一旦改成块级就会吃下 16.666% 的相对宽度、把整列压成细条（v2.6.2 实测）。 */
+}
+html.tv-mode .item .title,
+html.tv-mode .item p { font-size: 16px !important; line-height: 1.35 !important; }
+html.tv-mode body { font-size: 17px; }
+/* 顶部导航字放大 */
+html.tv-mode .navbar a, html.tv-mode .nav a { font-size: 20px !important; padding-top: 14px !important; padding-bottom: 14px !important; }
+/* 搜索框：遥控器打字已经够累，框做大一点 */
+html.tv-mode .index.search .input_text { height: 58px !important; font-size: 24px !important; }
+html.tv-mode .index.search .btn_submit { height: 58px !important; font-size: 24px !important; padding: 0 30px !important; }
+/* 去掉广告位和无关角落 */
+html.tv-mode #pc-adv-wrap, html.tv-mode #m-adv-wrap,
+html.tv-mode div[id*="adv-wrap"], html.tv-mode .float-ad { display: none !important; }
+/* 选集列表：一格一集，大按钮 */
+html.tv-mode #video-list .item {
+  font-size: 20px !important;
+  padding: 14px 10px !important;
+  margin: 6px 4px !important;
+  border-radius: 10px;
+  background: rgba(255,255,255,.08);
+  cursor: pointer;
+}
+html.tv-mode #video-list .item.active { background: #FFB300 !important; color: #111 !important; }
+/* 线路按钮做大 */
+html.tv-mode #lineContent div[name="lineData"] {
+  font-size: 20px !important;
+  padding: 12px 18px !important;
+  margin: 6px !important;
+  border-radius: 10px;
+  background: rgba(255,255,255,.10);
+  display: inline-block;
+  cursor: pointer;
+}
+html.tv-mode #lineContent div[name="lineData"].active { background: #FFB300 !important; color: #111 !important; }
+/* 播放器：大播放按钮 + 大控制条（进度/全屏都好按） */
+html.tv-mode .video-js .vjs-big-play-button {
+  width: 110px !important; height: 110px !important;
+  border-radius: 50% !important;
+  font-size: 52px !important; line-height: 110px !important;
+  left: 50% !important; top: 50% !important;
+  margin-left: -55px !important; margin-top: -55px !important;
+}
+html.tv-mode .video-js .vjs-control-bar { height: 52px !important; font-size: 17px !important; }
+html.tv-mode .video-js .vjs-button > .vjs-icon-placeholder:before { font-size: 30px !important; line-height: 52px !important; }
+/* 焦点滚动定位留白，别贴边 */
+html.tv-mode a, html.tv-mode button, html.tv-mode input,
+html.tv-mode #video-list .item, html.tv-mode #lineContent div[name="lineData"] {
+  scroll-margin: 110px 30px;
+}
+
+/* ================= 现代化精修（v2.2） ================= */
+/* 底部五栏：从「胖工具条」瘦身成现代流媒体 App 的细 tab 栏 */
+html.tv-mode .navbar-fixed-bottom {
+  min-height: 0 !important;
+  background: rgba(13,15,18,.97) !important;
+  border-top: 1px solid #262A31 !important;
+  box-shadow: 0 -8px 24px rgba(0,0,0,.35) !important;
+}
+html.tv-mode .navbar-fixed-bottom .container { margin: 0 auto !important; }
+html.tv-mode .navbar-fixed-bottom .nav-pills > li { width: 20%; margin: 0 !important; }
+html.tv-mode .navbar-fixed-bottom .nav-pills > li > a {
+  padding: 6px 0 5px !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  line-height: 1.15 !important;
+  font-size: 12px !important;
+  color: #A7ADB7 !important;
+  text-align: center;
+  position: relative;
+}
+html.tv-mode .navbar-fixed-bottom .glyphicon {
+  font-size: 20px !important;
+  line-height: 1 !important;
+}
+html.tv-mode .navbar-fixed-bottom .nav-pills > li.active > a,
+html.tv-mode .navbar-fixed-bottom .nav-pills > li > a:hover { color: #FFB300 !important; font-weight: 600; }
+/* 当前页标记：图标上方一条 24×3 的琥珀短横（与焦点态的整格高亮分开表达） */
+html.tv-mode .navbar-fixed-bottom .nav-pills > li.active > a:before {
+  content: '';
+  position: absolute;
+  top: 0; left: 50%;
+  width: 24px; height: 3px;
+  margin-left: -12px;
+  border-radius: 2px;
+  background: #FFB300;
+}
+/* 分区标题：去横线，加左侧琥珀竖条 + 字重层级（主流 TV 应用的做法） */
+html.tv-mode .v-list > h4 {
+  position: relative;
+  font-size: 19px !important;
+  font-weight: 700 !important;
+  color: #FFFFFF !important;
+  border-bottom: none !important;
+  padding-left: 13px !important;
+  margin: 22px 0 10px !important;
+}
+html.tv-mode .v-list > h4:before {
+  content: '';
+  position: absolute;
+  left: 0; top: 3px; bottom: 3px;
+  width: 4px;
+  border-radius: 2px;
+  background: #FFB300;
+}
+html.tv-mode .v-list > h4 span a {
+  font-size: 13px !important;
+  font-weight: 400 !important;
+  color: #9AA0A6 !important;
+}
+/* 海报网格：列间距收紧到 12px（Bootstrap 默认槽宽太大） */
+html.tv-mode .list-wp { margin-left: -6px !important; margin-right: -6px !important; }
+html.tv-mode .list-wp div.item { padding-left: 6px !important; padding-right: 6px !important; }
+/* 海报卡片：圆角，与深色背景拉开层次；未加载完先垫骨架同色块，加载后淡入 */
+html.tv-mode .item .cover-wp { border-radius: 10px !important; overflow: hidden; background: #1E2126; }
+html.tv-mode .item img.cover { border-radius: 10px !important; }
+html.tv-mode div.item { margin-bottom: 16px !important; }
+html.tv-mode .item img { transition: opacity .12s ease-out; }
+/* 卡片锚点改块级：站点结构是 .item(列) > a.item(内联) > 海报块+标题，
+   内联锚点包块级子元素时焦点阴影只画在块前后的空行盒碎片上（实测上下两坨药丸），
+   改成块级后阴影才围住整个卡片。注意只动 display，别给标题加 nowrap（见下）。 */
+html.tv-mode a.item { display: block !important; }
+/* 卡片标题：锚点内的 <p>（站点没有 .title 类）。
+   注意：这里绝不能加 white-space:nowrap + overflow:hidden——海报列是收缩贴合
+   （shrink-to-fit）宽度时，nowrap 的最小内容宽度会把整列压成一条窄缝，
+   v2.6 实测整页海报被压成细条。只改颜色字号，不动盒模型。 */
+html.tv-mode .item > a > p {
+  font-size: 15px !important;
+  font-weight: 500 !important;
+  color: #E8EAED !important;
+  text-align: center;
+  margin: 8px 0 0 !important;
+}
+/* 焦点三件套：老内核上 outline+transform 会把焦点框画碎，改用 box-shadow 环（渲染稳定）
+   + 轻投影；不再放大（保真优先） */
+html.tv-mode .tv-focused {
+  outline: none !important;
+  box-shadow: 0 0 0 3px #FFB300, 0 10px 28px rgba(0,0,0,.55) !important;
+}
+html.tv-mode .item.tv-focused { transform: none; border-radius: 12px; }
+/* 搜索框：胶囊形（现代搜索的通用形态） */
+html.tv-mode .index.search .input_text {
+  border-radius: 999px !important;
+  height: 46px !important;
+  padding-left: 22px !important;
+  font-size: 17px !important;
+}
+html.tv-mode .index.search .btn_submit {
+  border-radius: 999px !important;
+  height: 46px !important;
+  font-size: 17px !important;
+  white-space: nowrap !important;
+  min-width: 96px !important;
+  padding: 0 20px !important;
+}

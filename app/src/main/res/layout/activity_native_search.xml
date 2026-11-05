@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#101216"
+    android:gravity="center_horizontal"
+    android:orientation="vertical">
+
+    <!-- 全站统一标签栏（左对齐贴顶，与其他原生页同一套） -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingLeft="48dp"
+        android:paddingRight="48dp"
+        android:paddingTop="18dp"
+        android:paddingBottom="10dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="爱看电视"
+            android:textColor="#E8EAED"
+            android:textSize="22sp"
+            android:textStyle="bold" />
+
+        <LinearLayout
+            android:id="@+id/search_tabs"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginLeft="28dp"
+            android:orientation="horizontal" />
+    </LinearLayout>
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="96dp"
+        android:text="输入片名、短剧或演员名（建议用中文），按遥控器 OK 弹出键盘"
+        android:textColor="#9AA0A6"
+        android:textSize="15sp" />
+
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="30dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <EditText
+            android:id="@+id/search_input"
+            android:layout_width="430dp"
+            android:layout_height="wrap_content"
+            android:background="#1C1F26"
+            android:hint="例如：庆余年"
+            android:imeOptions="actionSearch"
+            android:inputType="text"
+            android:maxLines="1"
+            android:paddingLeft="18dp"
+            android:paddingRight="18dp"
+            android:paddingTop="13dp"
+            android:paddingBottom="13dp"
+            android:textColor="#E8EAED"
+            android:textColorHint="#5F6368"
+            android:textSize="18sp" />
+
+        <TextView
+            android:id="@+id/search_btn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginLeft="16dp"
+            android:background="@drawable/chip_frame"
+            android:focusable="true"
+            android:clickable="true"
+            android:paddingLeft="30dp"
+            android:paddingRight="30dp"
+            android:paddingTop="12dp"
+            android:paddingBottom="12dp"
+            android:text="搜索"
+            android:textColor="@color/chip_text"
+            android:textSize="18sp" />
+    </LinearLayout>
+</LinearLayout>

@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@android:color/black">
+
+    <WebView
+        android:id="@+id/webview"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <!-- HTML5 视频全屏容器 -->
+    <FrameLayout
+        android:id="@+id/fullscreen_container"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:visibility="gone" />
+
+    <!-- 顶部 3px 细进度线（现代流媒体通用的加载表达，替代居中大菊花） -->
+    <ProgressBar
+        android:id="@+id/progress"
+        style="?android:attr/progressBarStyleHorizontal"
+        android:layout_width="match_parent"
+        android:layout_height="3dp"
+        android:layout_gravity="top"
+        android:indeterminateTint="#FFB300"
+        android:visibility="gone" />
+
+    <!-- 骨架屏容器：页面加载超过 0.6 秒才显示（防闪烁），由代码填充灰块网格 -->
+    <LinearLayout
+        android:id="@+id/skeleton"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#101216"
+        android:orientation="vertical"
+        android:paddingLeft="105dp"
+        android:paddingRight="105dp"
+        android:paddingTop="120dp"
+        android:visibility="gone" />
+
+    <!-- 顶部操作提示条：几秒后自动消失，任意按键时短暂出现 -->
+    <TextView
+        android:id="@+id/hint_bar"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|center_horizontal"
+        android:layout_marginTop="18dp"
+        android:background="@drawable/hint_bg"
+        android:paddingLeft="22dp"
+        android:paddingRight="22dp"
+        android:paddingTop="10dp"
+        android:paddingBottom="10dp"
+        android:text="方向键选片 · OK 播放 · 返回键回上一页 · 菜单键回首页"
+        android:textColor="#FFFFFF"
+        android:textSize="19sp"
+        android:visibility="gone" />
+</FrameLayout>

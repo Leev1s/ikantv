@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 当前页标签文字：默认琥珀（配描边样式），聚焦变深色（配实心琥珀底） -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:color="#14161A" android:state_focused="true" />
+    <item android:color="#FFB300" />
+</selector>

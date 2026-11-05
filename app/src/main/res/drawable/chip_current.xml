@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 当前页标签：默认深底 + 琥珀描边（区别于普通标签），聚焦时与普通标签一致变实心琥珀 -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_focused="true">
+        <shape android:shape="rectangle">
+            <corners android:radius="0dp" />
+            <solid android:color="#FFB300" />
+        </shape>
+    </item>
+    <item>
+        <shape android:shape="rectangle">
+            <corners android:radius="0dp" />
+            <solid android:color="#1C1F26" />
+            <stroke android:width="2dp" android:color="#FFB300" />
+        </shape>
+    </item>
+</selector>

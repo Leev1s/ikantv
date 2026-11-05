@@ -1,0 +1,141 @@
+package com.lev1s.ikanbottv.ui;
+
+import android.app.Activity;
+import android.os.Bundle;
+import android.util.TypedValue;
+import android.view.View;
+import android.view.WindowManager;
+import android.widget.LinearLayout;
+import android.widget.TextView;
+
+import com.lev1s.ikanbottv.R;
+import com.lev1s.ikanbottv.data.HistoryStore;
+import com.lev1s.ikanbottv.data.VideoItem;
+
+import java.util.List;
+
+/**
+ * 原生「看过」页：本地历史（HistoryStore）的海报网格，排版与焦点规则同网格页
+ * （6 列、边距 48、卡间距 12、行距 16），点卡走 NavHelper 既有点播契约。
+ *
+ * 分包说明（2026-11-04 两版拆为独立 App）：旧版与 WebView 版同包时，这里有一座
+ * 「迁移桥」用临时 WebView 读同包 localStorage 的站点历史并入本地。分包后网页版
+ * 的存储在本应用沙盒之外、读不到，桥已删除；存量历史改由装机时一次性把旧包的
+ * native_history 偏好文件播种进来（HistoryStore 的 migrated 标记随文件一起过来），
+ * 此后历史只在本应用内生长（点播即记录，见 NavHelper.openItem）。
+ */
+public class NativeHistoryActivity extends Activity {
+
+    private static final int COLUMNS = 6;
+
+    private LinearLayout container;
+    private TextView emptyText;
+    private TextView clearChip;
+    private PosterLoader posterLoader;
+    private boolean destroyed = false;
+    private int cardWidthDp;
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        setContentView(R.layout.activity_native_history);
+
+        TabBar.attach(this, findViewById(R.id.history_tabs), TabBar.Tab.HISTORY);
+        container = findViewById(R.id.history_container);
+        emptyText = findViewById(R.id.history_empty);
+        clearChip = findViewById(R.id.history_clear);
+        posterLoader = PosterLoader.get(this);
+
+        float density = getResources().getDisplayMetrics().density;
+        int screenDp = (int) (getResources().getDisplayMetrics().widthPixels / density);
+        // 与网格页同一定版公式：卡宽 = (布局宽 − 边距 48×2 − 间距 12×(列数−1)) ÷ 列数
+        cardWidthDp = (screenDp - 96 - (COLUMNS - 1) * 12) / COLUMNS;
+
+        clearChip.setOnClickListener(v -> {
+            HistoryStore.clear(this);
+            render();
+        });
+
+        render();
+    }
+
+    // ---------------- 渲染 ----------------
+
+    private void render() {
+        List<VideoItem> items = HistoryStore.load(this);
+        container.removeAllViews();
+        if (items.isEmpty()) {
+            emptyText.setVisibility(View.VISIBLE);
+            clearChip.setVisibility(View.GONE);
+            emptyText.post(() -> {
+                if (!destroyed) emptyText.requestFocus();
+            });
+            return;
+        }
+        emptyText.setVisibility(View.GONE);
+        clearChip.setVisibility(View.VISIBLE);
+
+        PosterCardView firstCard = null;
+        LinearLayout row = null;
+        for (int i = 0; i < items.size(); i++) {
+            if (i % COLUMNS == 0) {
+                row = newRow();
+                container.addView(row);
+            }
+            VideoItem item = items.get(i);
+            PosterCardView card = new PosterCardView(this, cardWidthDp);
+            card.bind(item, posterLoader);
+            card.setOnClickListener(v -> NavHelper.openItem(this, item));
+            LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(
+                    card.getLayoutParams().width,
+                    LinearLayout.LayoutParams.WRAP_CONTENT);
+            cp.leftMargin = i % COLUMNS == 0 ? 0 : dp(12);
+            card.setLayoutParams(cp);
+            row.addView(card);
+            if (firstCard == null) firstCard = card;
+        }
+        // 末行补空位保持列对齐（同网格页 flushRow）
+        int rem = items.size() % COLUMNS;
+        if (rem != 0 && row != null) {
+            for (int i = rem; i < COLUMNS; i++) {
+                View spacer = new View(this);
+                LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(
+                        dp(cardWidthDp), 1);
+                sp.leftMargin = dp(12);
+                spacer.setLayoutParams(sp);
+                row.addView(spacer);
+            }
+        }
+        final PosterCardView focusTarget = firstCard;
+        if (focusTarget != null) {
+            focusTarget.post(() -> {
+                if (!destroyed) focusTarget.requestFocus();
+            });
+        }
+    }
+
+    private LinearLayout newRow() {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setClipChildren(false);
+        row.setClipToPadding(false);
+        LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+        rp.bottomMargin = dp(10);
+        row.setLayoutParams(rp);
+        return row;
+    }
+
+    @Override
+    protected void onDestroy() {
+        destroyed = true;
+        super.onDestroy();
+    }
+
+    private int dp(int v) {
+        return (int) TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v,
+                getResources().getDisplayMetrics());
+    }
+}

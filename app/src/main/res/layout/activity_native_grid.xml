@@ -1,0 +1,129 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#101216">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical">
+
+        <!-- 全站统一标签栏（与首页同一套，子页保留 header 以便跨标签跳页） -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingLeft="48dp"
+            android:paddingRight="48dp"
+            android:paddingTop="18dp"
+            android:paddingBottom="10dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="爱看电视"
+                android:textColor="#E8EAED"
+                android:textSize="22sp"
+                android:textStyle="bold" />
+
+            <LinearLayout
+                android:id="@+id/grid_tabs"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginLeft="28dp"
+                android:orientation="horizontal" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/grid_title_row"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingLeft="48dp"
+            android:paddingRight="48dp"
+            android:paddingTop="2dp"
+            android:paddingBottom="6dp">
+
+            <TextView
+                android:id="@+id/grid_title"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textColor="#E8EAED"
+                android:textSize="21sp"
+                android:textStyle="bold" />
+
+            <HorizontalScrollView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginLeft="24dp"
+                android:scrollbars="none">
+
+                <LinearLayout
+                    android:id="@+id/tag_row"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal" />
+            </HorizontalScrollView>
+        </LinearLayout>
+
+        <ScrollView
+            android:id="@+id/grid_scroll"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:clipChildren="false"
+            android:clipToPadding="false">
+
+            <LinearLayout
+                android:id="@+id/grid_container"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:clipChildren="false"
+                android:clipToPadding="false"
+                android:orientation="vertical"
+                android:paddingLeft="48dp"
+                android:paddingRight="48dp"
+                android:paddingTop="14dp"
+                android:paddingBottom="16dp" />
+        </ScrollView>
+
+        <TextView
+            android:id="@+id/footer_text"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:paddingTop="6dp"
+            android:paddingBottom="10dp"
+            android:textColor="#9AA0A6"
+            android:textSize="14sp"
+            android:visibility="gone" />
+    </LinearLayout>
+
+    <!-- 空态提示：加载成功但一条都没有（或搜索无结果）时显示并聚焦，
+         避免只剩标题的黑页死胡同 -->
+    <TextView
+        android:id="@+id/grid_empty"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:focusable="true"
+        android:gravity="center"
+        android:textColor="#E8EAED"
+        android:textSize="16sp"
+        android:visibility="gone" />
+
+    <!-- 骨架屏覆盖层：首屏加载时盖住空容器，块与海报卡同尺寸同列数；
+         由 NativeGridActivity 在 onCreate 里按卡宽填块，数据到达即撤 -->
+    <LinearLayout
+        android:id="@+id/grid_skeleton"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#101216"
+        android:orientation="vertical"
+        android:paddingLeft="48dp"
+        android:paddingRight="48dp"
+        android:paddingTop="124dp"
+        android:visibility="gone" />
+</FrameLayout>

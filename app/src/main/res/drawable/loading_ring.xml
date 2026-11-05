@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 现代加载环：琥珀色渐变弧线旋转（给系统 ProgressBar 换的主题图，非自制控件） -->
+<rotate xmlns:android="http://schemas.android.com/apk/res/android"
+    android:fromDegrees="0"
+    android:toDegrees="360"
+    android:pivotX="50%"
+    android:pivotY="50%">
+    <shape
+        android:shape="ring"
+        android:innerRadiusRatio="3.2"
+        android:thicknessRatio="10"
+        android:useLevel="false">
+        <gradient
+            android:type="sweep"
+            android:startColor="#00FFB300"
+            android:centerColor="#66FFB300"
+            android:endColor="#FFB300" />
+    </shape>
+</rotate>

@@ -1,0 +1,33 @@
+# Build output & fetched dependencies (rebuilt / re-downloaded by build.sh)
+build-manual/
+build-deps/
+*.apk
+
+# Signing material: the plain keystore NEVER goes into git.
+# Only its base64 text form may be committed, and only if the owner chose that.
+keystore/*.jks
+keystore/*.keystore
+
+# Local Android / IDE state
+local.properties
+.gradle/
+.idea/
+*.iml
+
+# Restored binary assets are generated from ci-assets/*.b64 by build.sh;
+# they are listed here so a local build doesn't dirty the tree. The list
+# mirrors ci-assets/MANIFEST.txt.
+app/src/main/assets/vendor/glyphicons-halflings-regular.ttf
+app/src/main/assets/vendor/glyphicons-halflings-regular.woff
+app/src/main/assets/vendor/glyphicons-halflings-regular.woff2
+app/src/main/res/drawable-xhdpi/tv_banner.png
+app/src/main/res/drawable-xxhdpi/tv_banner.png
+app/src/main/res/mipmap-hdpi/ic_launcher.png
+app/src/main/res/mipmap-mdpi/ic_launcher.png
+app/src/main/res/mipmap-xhdpi/ic_launcher.png
+app/src/main/res/mipmap-xxhdpi/ic_launcher.png
+app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
+app/src/main/res/mipmap-xxxhdpi/ic_launcher_background.png
+app/src/main/res/mipmap-xxxhdpi/ic_launcher_foreground.png
+
+.DS_Store

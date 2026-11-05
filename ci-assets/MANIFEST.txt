@@ -1,0 +1,15 @@
+# Binary assets stored as base64 text so the whole repo stays UTF-8 text.
+# build.sh restores each file to its original path before compiling and
+# verifies the SHA-256 below. Format: <sha256>  <original repo-relative path>
+e395044093757d82afcb138957d06a1ea9361bdcf0b442d06a18a8051af57456  app/src/main/assets/vendor/glyphicons-halflings-regular.ttf
+a26394f7ede100ca118eff2eda08596275a9839b959c226e15439557a5a80742  app/src/main/assets/vendor/glyphicons-halflings-regular.woff
+fe185d11a49676890d47bb783312a0cda5a44c4039214094e7957b4c040ef11c  app/src/main/assets/vendor/glyphicons-halflings-regular.woff2
+3dfa4830ddd12ecfd9ce22916aa236358c9de058c2c5b2e95b099ffef687093e  app/src/main/res/drawable-xhdpi/tv_banner.png
+a90a6e3f012f23039fed218d7b7cfd1a9da05f1608ac8a26d8992b2286d2404d  app/src/main/res/drawable-xxhdpi/tv_banner.png
+49465639d66d6a88e48de3b2051b26b82463b6bbf6968a20a929e106864d429e  app/src/main/res/mipmap-hdpi/ic_launcher.png
+7e7bd822e196ec943daa6a22a05537b28045caf3c1d6b4ccabe7464b9e2dafc9  app/src/main/res/mipmap-mdpi/ic_launcher.png
+74dd24a75077b620856560dc1649b8a2778a2b87662ac09c49704e07fe87f184  app/src/main/res/mipmap-xhdpi/ic_launcher.png
+880eb1879ab215b44afc5b095d6a9de3bb6221a457663fbce0632471f942be12  app/src/main/res/mipmap-xxhdpi/ic_launcher.png
+276195d8d13b7b121bc4f19c675197a9e8b24f35a9abd5c6faa271ba98b1c9cc  app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
+a272ac36a6627ccb5be418d7a32f6ab1d18b7c4e5e90c81323032886790b2ec8  app/src/main/res/mipmap-xxxhdpi/ic_launcher_background.png
+6add9b827ecca6719554f893e0bf07e3370d0ca0b2c67e56da38b9c893e8efca  app/src/main/res/mipmap-xxxhdpi/ic_launcher_foreground.png

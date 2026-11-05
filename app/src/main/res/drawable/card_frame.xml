@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 海报卡焦点框：原生绘制的琥珀描边（替代 WebView 时代的 CSS box-shadow 光环） -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_focused="true">
+        <shape android:shape="rectangle">
+            <corners android:radius="0dp" />
+            <solid android:color="#1C1F26" />
+            <stroke android:width="3dp" android:color="#FFB300" />
+        </shape>
+    </item>
+    <item>
+        <shape android:shape="rectangle">
+            <corners android:radius="0dp" />
+            <solid android:color="@android:color/transparent" />
+        </shape>
+    </item>
+</selector>
