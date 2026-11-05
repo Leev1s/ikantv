@@ -1,6 +1,5 @@
 package com.lev1s.ikantv.ui;
 
-import android.app.Activity;
 import android.content.Intent;
 import android.os.Bundle;
 import android.os.Handler;
@@ -28,7 +27,7 @@ import java.util.List;
  * 数据来自站点首页 HTML 的原生解析（IkanDataSource），点海报直达现有原生播放器。
  * 撞 Cloudflare 校验/解析失效时自动降级到 WebView 原站模式（MainActivity）。
  */
-public class NativeHomeActivity extends Activity {
+public class NativeHomeActivity extends NativeBrowseActivity {
 
     private LinearLayout sectionsContainer;
     private LinearLayout topEntries;

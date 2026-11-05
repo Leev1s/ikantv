@@ -1,6 +1,5 @@
 package com.lev1s.ikantv.ui;
 
-import android.app.Activity;
 import android.app.AlertDialog;
 import android.os.Bundle;
 import android.util.TypedValue;
@@ -25,7 +24,7 @@ import java.util.List;
  * native_history 偏好文件播种进来（HistoryStore 的 migrated 标记随文件一起过来），
  * 此后历史只在本应用内生长（点播即记录，见 NavHelper.openItem）。
  */
-public class NativeHistoryActivity extends Activity {
+public class NativeHistoryActivity extends NativeBrowseActivity {
 
     private static final int COLUMNS = 6;
 

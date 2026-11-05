@@ -52,7 +52,7 @@
             android:id="@+id/search_input"
             android:layout_width="430dp"
             android:layout_height="wrap_content"
-            android:background="#1C1F26"
+            android:background="@drawable/search_input_frame"
             android:hint="例如：庆余年"
             android:imeOptions="actionSearch"
             android:inputType="text"

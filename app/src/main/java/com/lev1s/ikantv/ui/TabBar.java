@@ -14,9 +14,8 @@ import com.lev1s.ikantv.data.IkanDataSource;
  * 当前页标签描边高亮，按 OK 直接跳页（2026-11-04 Jasen 要求：子页面也要保留
  * header，能在五个选项卡之间快速跳动）。
  *
- * 跳转语义保持任务栈扁平：首页是根——从首页出发不 finish 首页（返回键还能
- * 回到首页）；子页之间切换时 finish 自己（栈深恒定，返回永远落回首页）；
- * 点「首页」= finish 自己回到根。当前页标签点击无动作。
+ * 顶栏切换先清栈回已有首页，再打开目标页；普通返回保留原有层级。
+ * 首页始终留在目标页下方，当前页标签点击无动作。
  */
 public final class TabBar {
 
@@ -63,13 +62,25 @@ public final class TabBar {
     private static void go(Activity act, Tab tab, Tab current) {
         if (tab == current) return;
         if (tab == Tab.HOME) {
-            if (!(act instanceof NativeHomeActivity)) act.finish();
+            goHome(act);
             return;
         }
         Intent intent = intentFor(act, tab);
         if (intent == null) return;
-        act.startActivity(intent);
-        if (!(act instanceof NativeHomeActivity)) act.finish();
+        if (act instanceof NativeHomeActivity) {
+            act.startActivity(intent);
+        } else {
+            act.startActivities(new Intent[]{homeIntent(act), intent});
+        }
+    }
+
+    static void goHome(Activity act) {
+        if (!(act instanceof NativeHomeActivity)) act.startActivity(homeIntent(act));
+    }
+
+    private static Intent homeIntent(Activity act) {
+        return new Intent(act, NativeHomeActivity.class)
+                .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
     }
 
     private static Intent intentFor(Activity act, Tab tab) {

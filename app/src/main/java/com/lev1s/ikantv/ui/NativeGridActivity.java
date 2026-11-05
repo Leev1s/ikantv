@@ -1,6 +1,5 @@
 package com.lev1s.ikantv.ui;
 
-import android.app.Activity;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -31,7 +30,7 @@ import java.util.List;
  *   KIND_SEARCH              —— 模板 B 列表行（小海报 + 标题 + 简介），游标翻页
  * 点任意条目走 NavHelper 的既有播放契约。
  */
-public class NativeGridActivity extends Activity {
+public class NativeGridActivity extends NativeBrowseActivity {
 
     public static final String EXTRA_TITLE = "title";
     public static final String EXTRA_URL = "url";
