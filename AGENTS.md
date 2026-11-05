@@ -40,9 +40,8 @@ upgrade in place only when versionCode increases and the signature matches.
   package; Manifest activities use relative names (`.ui.NativeHomeActivity`).
   Before 2.8.2 the code package was `com.lev1s.ikanbottv` and the
   applicationId `com.lev1s.ikanbottv.native` (`native` is a Java keyword) —
-  that split is history, do not resurrect it. Exception: the string
-  literals `com.lev1s.ikanbottv` inside `NavHelper` name the *sibling*
-  WebView app and must stay exactly as they are.
+  that split is history, do not resurrect it. The string
+  `com.lev1s.ikanbottv` must not appear in this repo's code at all.
 - **Player is libVLC 3.5.1** (`PlayerActivity`), not Media3/ExoPlayer.
   All libVLC calls (stop/setMedia/play) must stay serialized on the
   player's background executor: libVLC 3.x `stop()` is synchronous and
@@ -61,9 +60,14 @@ upgrade in place only when versionCode increases and the signature matches.
   `PlayerActivity`). Parser changes are fragile by nature — the site
   structure findings live in `docs/research/site-probe-report.md`;
   check it before touching `IkanHtmlParser`.
-- **Cross-app fallback**: when the site's challenge page blocks the native
-  path, `NavHelper` opens the sibling WebView app （爱看电视，
-  `com.lev1s.ikanbottv`) instead of failing. Keep that escape hatch working.
+- **Fully independent apps.** This app never references, launches or
+  shares state with the sibling WebView app （爱看电视）: no cross-app
+  intents, no package-name literals of the other app, no shared storage.
+  When the site's challenge page blocks the native path or parsing
+  fails, the browsing UI says so in plain words and offers in-app
+  retry (see `onLoadError` in the browsing activities). Do not
+  reintroduce a cross-app escape hatch. (Cut clean in 2.8.3; before
+  that, errors and the Menu key used to jump to the WebView app.)
 
 ## TV UI Rules (settled — do not relitigate)
 

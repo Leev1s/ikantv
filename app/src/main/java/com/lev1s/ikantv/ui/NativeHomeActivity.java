@@ -135,19 +135,22 @@ public class NativeHomeActivity extends Activity {
     }
 
     private void onLoadError(FetchException e) {
+        // 失败一律应用内提示 + 点击重试，不跳转其他应用（两版完全独立）
+        String msg;
         switch (e.kind) {
             case CHALLENGED:
-                NavHelper.degradeToSite(this, "网站好像在做人机校验");
+                msg = "网站好像在做人机校验\n过一会儿点这里再试一次";
                 break;
             case PARSE_EMPTY:
-                NavHelper.degradeToSite(this, "页面解析失败（站点可能改版了）");
+                msg = "页面解析失败（站点可能改版了）\n点这里再试一次";
                 break;
             default:
-                errorText.setText("网络好像不太顺\n点这里再试一次");
-                errorText.setVisibility(View.VISIBLE);
-                errorText.setFocusable(true);
-                errorText.requestFocus();
+                msg = "网络好像不太顺\n点这里再试一次";
         }
+        errorText.setText(msg);
+        errorText.setVisibility(View.VISIBLE);
+        errorText.setFocusable(true);
+        errorText.requestFocus();
     }
 
     private void buildSections(List<Section> sections) {
@@ -253,18 +256,6 @@ public class NativeHomeActivity extends Activity {
         }
         scroll.addView(rail);
         return scroll;
-    }
-
-    @Override
-    public boolean dispatchKeyEvent(KeyEvent event) {
-        if (event.getAction() == KeyEvent.ACTION_DOWN
-                && (event.getKeyCode() == KeyEvent.KEYCODE_MENU
-                || event.getKeyCode() == KeyEvent.KEYCODE_GUIDE)) {
-            // 菜单键 = 切换到网页版 App（分包后原站模式是独立应用，跨包打开）
-            NavHelper.openWebViewApp(this, "已切换到网页版「爱看电视」");
-            return true;
-        }
-        return super.dispatchKeyEvent(event);
     }
 
     @Override

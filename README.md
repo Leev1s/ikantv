@@ -5,10 +5,11 @@ ikanbot.com 的 Android TV 原生客户端：原生界面浏览
 
 - 应用名：爱看电视·原生版
 - 包名（applicationId）：`com.lev1s.ikantv`
-- 当前版本：versionCode 3 / versionName 2.8.2
+- 当前版本：versionCode 4 / versionName 2.8.3
 - 系统要求：Android 9+（minSdk 28），targetSdk 34，横屏，仅 armeabi-v7a
-- 同系列还有一个 WebView 版「爱看电视」（`com.lev1s.ikanbottv`），在另一个工程里，
-  两者独立安装、各自记录；原生版遇到站点挑战页打不开时，用菜单键可跨包打开它兜底。
+- 同系列还有一个 WebView 版「爱看电视」（`com.lev1s.ikanbottv`），在另一个工程里。
+  两个应用完全独立：各自安装、各自记录，互不调用、互不共享状态；本应用遇到
+  站点人机校验或解析失败时只在应用内提示重试，不跳转到另一个应用。
 
 ## 构建
 

@@ -8,7 +8,7 @@ import com.lev1s.ikantv.PlayerActivity;
 import com.lev1s.ikantv.data.HistoryStore;
 import com.lev1s.ikantv.data.VideoItem;
 
-/** 原生浏览层共用的跳转：点播契约与降级出口。 */
+/** 原生浏览层共用的跳转：点播入口。本应用与网页版完全独立，这里没有任何跨应用调用。 */
 public final class NavHelper {
 
     private NavHelper() { }
@@ -35,30 +35,6 @@ public final class NavHelper {
             from.startActivity(intent);
         } else {
             Toast.makeText(from, "这个条目暂时打不开", Toast.LENGTH_SHORT).show();
-        }
-    }
-
-    /**
-     * 浏览层降级：撞上 Cloudflare 校验或解析失效时，切换到独立的网页版 App
-     * （「爱看电视」，包名 com.lev1s.ikanbottv——两版已分包，MainActivity 在
-     * 那个应用里），保证用户永远有得看；网页版未安装时只提示、不崩。
-     */
-    public static void degradeToSite(Activity from, String reason) {
-        openWebViewApp(from, reason + "，已切换到网页版「爱看电视」");
-    }
-
-    /** 跨应用打开网页版「爱看电视」（分包后的原站模式兜底出口）。 */
-    public static void openWebViewApp(Activity from, String toastText) {
-        try {
-            Intent intent = new Intent();
-            intent.setClassName("com.lev1s.ikanbottv",
-                    "com.lev1s.ikanbottv.MainActivity");
-            intent.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
-            from.startActivity(intent);
-            Toast.makeText(from, toastText, Toast.LENGTH_LONG).show();
-        } catch (Exception e) {
-            Toast.makeText(from, "网页版「爱看电视」未安装，无法切换",
-                    Toast.LENGTH_LONG).show();
         }
     }
 }

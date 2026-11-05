@@ -297,22 +297,27 @@ public class NativeGridActivity extends Activity {
     private void onLoadError(FetchException e, boolean firstPage) {
         switch (e.kind) {
             case CHALLENGED:
-                NavHelper.degradeToSite(this, "网站好像在做人机校验");
+                // 失败一律应用内提示 + 点击重试，不跳转其他应用（两版完全独立）
+                showFooterRetry("网站好像在做人机校验，过一会儿点这里重试");
                 break;
             case PARSE_EMPTY:
                 if (KIND_SEARCH.equals(kind)) {
                     // 搜不到就是搜不到：居中空态 + 焦点落点，别留只剩标题的黑页
                     showEmpty("没有搜到「" + query + "」，换个片名试试（建议用中文全名）");
                 } else {
-                    NavHelper.degradeToSite(this, "页面解析失败（站点可能改版了）");
+                    showFooterRetry("页面解析失败（站点可能改版了），点这里重试");
                 }
                 break;
             default:
-                footer.setText("网络好像不太顺，点这里重试");
-                footer.setVisibility(View.VISIBLE);
-                footer.setFocusable(true);
-                footer.requestFocus();
+                showFooterRetry("网络好像不太顺，点这里重试");
         }
+    }
+
+    private void showFooterRetry(String msg) {
+        footer.setText(msg);
+        footer.setVisibility(View.VISIBLE);
+        footer.setFocusable(true);
+        footer.requestFocus();
     }
 
     private void updateFooter() {
