@@ -60,9 +60,8 @@ public class PosterLoader {
                 return bmp.getByteCount() / 1024;
             }
         };
-        // 目录名带版本号：v1 缓存里可能存了截断海报（代理回源不全时解码出
-        // 半截图还被当好图缓存），换目录一次性作废（2026-11-04 真机抓到）
-        diskDir = new File(ctx.getCacheDir(), "posters2");
+        // 新目录隔离旧版非原子写入时可能留下的截断缓存。
+        diskDir = new File(ctx.getCacheDir(), "posters3");
         //noinspection ResultOfMethodCallIgnored
         diskDir.mkdirs();
     }
@@ -236,8 +235,16 @@ public class PosterLoader {
     }
 
     private void writeQuietly(File f, byte[] data) {
-        try (FileOutputStream out = new FileOutputStream(f)) {
-            out.write(data);
-        } catch (Exception ignored) { }
+        File temp = null;
+        try {
+            temp = File.createTempFile("poster-", ".tmp", diskDir);
+            try (FileOutputStream out = new FileOutputStream(temp)) {
+                out.write(data);
+            }
+            if (temp.renameTo(f)) temp = null;
+        } catch (Exception ignored) {
+        } finally {
+            if (temp != null) temp.delete();
+        }
     }
 }

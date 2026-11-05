@@ -38,7 +38,12 @@ public class NativeHomeActivity extends NativeBrowseActivity {
     private boolean destroyed = false;
     private View firstCard;
     private View skeletonGroup;
-    private final Runnable skeletonFailsafe = () -> removeSkeleton();
+    private int loadGen;
+    private final Runnable skeletonFailsafe = () -> {
+        ++loadGen;
+        removeSkeleton();
+        showError("加载时间较长，点这里再试一次");
+    };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -62,6 +67,7 @@ public class NativeHomeActivity extends NativeBrowseActivity {
     }
 
     private void loadHome() {
+        final int gen = ++loadGen;
         errorText.setVisibility(View.GONE);
         sectionsContainer.removeAllViews();
         showSkeleton();
@@ -69,13 +75,13 @@ public class NativeHomeActivity extends NativeBrowseActivity {
             try {
                 List<Section> sections = IkanDataSource.fetchHome();
                 handler.post(() -> {
-                    if (destroyed) return;
+                    if (destroyed || gen != loadGen) return;
                     removeSkeleton();
                     buildSections(sections);
                 });
             } catch (FetchException e) {
                 handler.post(() -> {
-                    if (destroyed) return;
+                    if (destroyed || gen != loadGen) return;
                     removeSkeleton();
                     onLoadError(e);
                 });
@@ -146,10 +152,14 @@ public class NativeHomeActivity extends NativeBrowseActivity {
             default:
                 msg = "网络好像不太顺\n点这里再试一次";
         }
+        showError(msg);
+    }
+
+    private void showError(String msg) {
         errorText.setText(msg);
         errorText.setVisibility(View.VISIBLE);
         errorText.setFocusable(true);
-        errorText.requestFocus();
+        if (interactionCount == 0) errorText.requestFocus();
     }
 
     private void buildSections(List<Section> sections) {
@@ -160,7 +170,7 @@ public class NativeHomeActivity extends NativeBrowseActivity {
         }
         if (firstCard != null) {
             firstCard.post(() -> {
-                if (!destroyed) firstCard.requestFocus();
+                if (!destroyed && interactionCount == 0) firstCard.requestFocus();
             });
         }
     }

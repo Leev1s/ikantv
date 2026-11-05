@@ -34,6 +34,7 @@ public class NativeHistoryActivity extends NativeBrowseActivity {
     private PosterLoader posterLoader;
     private boolean destroyed = false;
     private int cardWidthDp;
+    private long returnVideoId;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -58,6 +59,15 @@ public class NativeHistoryActivity extends NativeBrowseActivity {
         emptyText.setOnClickListener(v -> finish());
 
         render();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (returnVideoId > 0) {
+            render();
+            returnVideoId = 0;
+        }
     }
 
     /** 清空是不可逆操作且历史是核心资产，必须二次确认（UX 评审 C3）。
@@ -102,14 +112,19 @@ public class NativeHistoryActivity extends NativeBrowseActivity {
             VideoItem item = items.get(i);
             PosterCardView card = new PosterCardView(this, cardWidthDp);
             card.bind(item, posterLoader);
-            card.setOnClickListener(v -> NavHelper.openItem(this, item));
+            card.setOnClickListener(v -> {
+                returnVideoId = item.videoId;
+                NavHelper.openItem(this, item);
+            });
             LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(
                     card.getLayoutParams().width,
                     LinearLayout.LayoutParams.WRAP_CONTENT);
             cp.leftMargin = i % COLUMNS == 0 ? 0 : dp(12);
             card.setLayoutParams(cp);
             row.addView(card);
-            if (firstCard == null) firstCard = card;
+            if (firstCard == null || (returnVideoId > 0 && item.videoId == returnVideoId)) {
+                firstCard = card;
+            }
         }
         // 末行补空位保持列对齐（同网格页 flushRow）
         int rem = items.size() % COLUMNS;

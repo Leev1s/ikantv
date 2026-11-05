@@ -69,11 +69,14 @@
             </HorizontalScrollView>
         </LinearLayout>
 
+        <FrameLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1">
         <ScrollView
             android:id="@+id/grid_scroll"
             android:layout_width="match_parent"
-            android:layout_height="0dp"
-            android:layout_weight="1"
+            android:layout_height="match_parent"
             android:clipChildren="false"
             android:clipToPadding="false">
 
@@ -89,6 +92,17 @@
                 android:paddingTop="14dp"
                 android:paddingBottom="16dp" />
         </ScrollView>
+        <LinearLayout
+            android:id="@+id/grid_skeleton"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="#101216"
+            android:orientation="vertical"
+            android:paddingLeft="48dp"
+            android:paddingRight="48dp"
+            android:paddingTop="14dp"
+            android:visibility="gone" />
+        </FrameLayout>
 
         <!-- 页脚：报错重试时是焦点落点，套 card_frame 琥珀描边保证焦点可见
              （UX 评审 C1）；未聚焦时该 selector 是透明底，不改变常态外观 -->
@@ -124,16 +138,4 @@
         android:textSize="16sp"
         android:visibility="gone" />
 
-    <!-- 骨架屏覆盖层：首屏加载时盖住空容器，块与海报卡同尺寸同列数；
-         由 NativeGridActivity 在 onCreate 里按卡宽填块，数据到达即撤 -->
-    <LinearLayout
-        android:id="@+id/grid_skeleton"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:background="#101216"
-        android:orientation="vertical"
-        android:paddingLeft="48dp"
-        android:paddingRight="48dp"
-        android:paddingTop="124dp"
-        android:visibility="gone" />
 </FrameLayout>

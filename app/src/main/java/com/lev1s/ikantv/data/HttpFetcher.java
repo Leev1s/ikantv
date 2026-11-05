@@ -76,16 +76,18 @@ public final class HttpFetcher {
                 || body.contains("cf-challenge-running");
     }
 
-    /** URL 里若含未编码的非 ASCII（如中文标签）或空格，逐字百分号编码（UTF-8）。 */
+    /** URL 中未编码的非 ASCII 字符和空格按 Unicode 码点编码，已有转义保持不变。 */
     static String sanitize(String url) {
         StringBuilder sb = new StringBuilder(url.length() + 16);
-        for (int i = 0; i < url.length(); i++) {
-            char ch = url.charAt(i);
-            if (ch > 127 || ch == ' ') {
-                byte[] bs = String.valueOf(ch).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        for (int i = 0; i < url.length();) {
+            int cp = url.codePointAt(i);
+            i += Character.charCount(cp);
+            if (cp > 127 || cp == ' ') {
+                byte[] bs = new String(Character.toChars(cp))
+                        .getBytes(java.nio.charset.StandardCharsets.UTF_8);
                 for (byte b : bs) sb.append('%').append(String.format("%02X", b & 0xFF));
             } else {
-                sb.append(ch);
+                sb.append((char) cp);
             }
         }
         return sb.toString();
@@ -96,17 +98,22 @@ public final class HttpFetcher {
         byte[] buf = new byte[16384];
         int n, total = 0;
         while ((n = is.read(buf)) > 0) {
-            bos.write(buf, 0, n);
             total += n;
-            if (total > MAX_BYTES) break;
+            if (total > MAX_BYTES) {
+                throw new FetchException(FetchException.Kind.RESPONSE_TOO_LARGE,
+                        "响应超过 " + MAX_BYTES + " 字节上限");
+            }
+            bos.write(buf, 0, n);
         }
         return bos.toString("UTF-8");
     }
 
-    private static String readQuietly(InputStream is) {
+    private static String readQuietly(InputStream is) throws FetchException {
         if (is == null) return null;
         try {
             return readAll(is);
+        } catch (FetchException e) {
+            throw e;
         } catch (Exception e) {
             return null;
         } finally {

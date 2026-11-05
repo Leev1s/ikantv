@@ -62,7 +62,7 @@
             android:paddingTop="13dp"
             android:paddingBottom="13dp"
             android:textColor="#E8EAED"
-            android:textColorHint="#5F6368"
+            android:textColorHint="#9AA0A6"
             android:textSize="18sp" />
 
         <TextView

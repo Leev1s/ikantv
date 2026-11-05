@@ -13,6 +13,8 @@ import java.util.List;
 public final class IkanDataSource {
 
     public static final String BASE = "https://www.ikanbot.com";
+    private static final java.util.logging.Logger LOG =
+            java.util.logging.Logger.getLogger(IkanDataSource.class.getName());
 
     private IkanDataSource() { }
 
@@ -48,17 +50,25 @@ public final class IkanDataSource {
         }
         String html = HttpFetcher.get(url);
         GridPage page = IkanHtmlParser.parseSearch(html, url);
-        if (page.items.isEmpty()) {
-            throw new FetchException(FetchException.Kind.PARSE_EMPTY,
-                    "搜索「" + query + "」解析出 0 条目");
-        }
-        return page;
+        return checkSearchPage(page);
     }
 
     /** 搜索下一页：nextPageUrl 来自上一页页内链接（含 n= 游标，原样跟随）。 */
     public static GridPage fetchSearchNext(String nextPageUrl) throws FetchException {
         String html = HttpFetcher.get(nextPageUrl);
-        return IkanHtmlParser.parseSearch(html, nextPageUrl);
+        return checkSearchPage(IkanHtmlParser.parseSearch(html, nextPageUrl));
+    }
+
+    private static GridPage checkSearchPage(GridPage page) throws FetchException {
+        if (page.items.isEmpty()) {
+            if (page.searchNoResults) {
+                LOG.info("搜索页明确显示无结果");
+            } else {
+                LOG.warning("搜索页无结果条目且缺少无结果标记，解析失败");
+                throw new FetchException(FetchException.Kind.PARSE_EMPTY, "搜索页解析出 0 条目");
+            }
+        }
+        return page;
     }
 
     public static List<Section> fetchBillboard() throws FetchException {
@@ -84,6 +94,8 @@ public final class IkanDataSource {
     /** 列表页（/hot/、/category/、搜索）解析结果：本页条目 + 下一页 URL。 */
     public static class GridPage {
         public List<VideoItem> items = new ArrayList<>();
+        /** 搜索页明确出现站点的无结果提示。 */
+        public boolean searchNoResults;
         /**
          * 下一页完整 URL；null = 没有下一页。
          * /hot/ 与 /category/ 是从页内分页链接提取（也可按规律构造），

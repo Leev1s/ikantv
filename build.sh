@@ -16,8 +16,8 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-VERSION_CODE=7
-VERSION_NAME=2.8.6
+VERSION_CODE=8
+VERSION_NAME=2.8.7
 APP_ID=com.lev1s.ikantv
 
 # --- toolchain ---

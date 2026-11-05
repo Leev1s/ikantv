@@ -80,12 +80,14 @@ public class PlayerActivity extends Activity {
     private String videoTitle = "";
     private boolean isMovie = false;
     private final List<String> episodes = new ArrayList<>();
+    private final List<String> legacyEpisodes = new ArrayList<>();
     private final List<LineData> lines = new ArrayList<>();
     private int curEp = 0;
     private int curLine = 0;
     private final Set<String> badSources = new HashSet<>();       // "ep|line"
     private final Map<Integer, Integer> lineLatency = new HashMap<>(); // line -> ms, -1=失败
     private final Map<Integer, Boolean> lineProbeDone = new HashMap<>();
+    private final Set<String> lineProbesInFlight = new HashSet<>();
 
     // ---------- 播放器（libVLC 现成播放器内核：HTTPS + AES-128 HLS + MediaCodec 硬解） ----------
     private volatile LibVLC libVlc;
@@ -94,6 +96,8 @@ public class PlayerActivity extends Activity {
     private boolean dataReady = false;
     private boolean prepared = false;
     private boolean userPaused = false;
+    private volatile boolean foreground = false;
+    private volatile boolean pendingStart = false;
     private long pendingSeekMs = -1;
     private int speedIdx = 0;
     private static final float[] SPEEDS = {1.0f, 1.25f, 1.5f, 2.0f, 0.5f};
@@ -112,6 +116,7 @@ public class PlayerActivity extends Activity {
     private TextView panelTitle;
     private GridView epGrid;
     private ListView lineList;
+    private LineAdapter lineAdapter;
     private boolean panelOpen = false;
     private boolean panelEpMode = true;
 
@@ -190,6 +195,7 @@ public class PlayerActivity extends Activity {
             if (position != curEp) switchEpisode(position, true);
         });
         lineList.setOnItemClickListener((parent, view, position, id) -> {
+            if (!lines.get(position).urls.containsKey(episodes.get(curEp))) return;
             closePanel();
             if (position != curLine) switchLine(position, true, safePos());
         });
@@ -253,6 +259,7 @@ public class PlayerActivity extends Activity {
         }
         JSONArray list = j.getJSONObject("data").getJSONArray("list");
         JSONArray linesArr = new JSONArray();
+        boolean hasPlayableUrl = false;
         for (int i = 0; i < list.length(); i++) {
             JSONObject item = list.getJSONObject(i);
             JSONObject urls = new JSONObject();
@@ -267,6 +274,7 @@ public class PlayerActivity extends Activity {
                         String url = part.substring(d + 1).trim();
                         if (!name.isEmpty() && url.matches("(?i).*\\.m3u8(\\?.*)?$")) {
                             urls.put(name, url);
+                            hasPlayableUrl = true;
                         }
                     }
                 }
@@ -275,6 +283,10 @@ public class PlayerActivity extends Activity {
             lo.put("id", item.optString("id", ""));
             lo.put("urls", urls);
             linesArr.put(lo);
+        }
+        if (!hasPlayableUrl) {
+            Log.w(TAG, "native api has no playable lines; falling back to WebView");
+            return null;
         }
         String title = "";
         java.util.regex.Matcher tm = java.util.regex.Pattern
@@ -315,9 +327,12 @@ public class PlayerActivity extends Activity {
             int n, total = 0;
             try {
                 while ((n = is.read(buf)) > 0) {
-                    bos.write(buf, 0, n);
                     total += n;
-                    if (total > 600_000) break;
+                    if (total > 600_000) {
+                        Log.w(TAG, "player response exceeds size limit");
+                        return null;
+                    }
+                    bos.write(buf, 0, n);
                 }
             } finally {
                 // 读尽并关闭流后连接可回池复用，不要 disconnect（会销毁连接）
@@ -454,20 +469,19 @@ public class PlayerActivity extends Activity {
                 setLoading(true, "这部片子暂时没有可用线路，请返回换一部");
                 return;
             }
-            // 集数 = 条目最多的那条线路的条目顺序
+            // 合并所有线路的集名，同时保留旧版最丰富线路排序以迁移旧索引。
             LineData richest = lines.get(0);
-            for (LineData ld : lines) if (ld.urls.size() > richest.urls.size()) richest = ld;
+            Set<String> allEpisodes = new HashSet<>();
+            for (LineData ld : lines) {
+                allEpisodes.addAll(ld.urls.keySet());
+                if (ld.urls.size() > richest.urls.size()) richest = ld;
+            }
+            legacyEpisodes.clear();
+            legacyEpisodes.addAll(richest.urls.keySet());
+            legacyEpisodes.sort(PlayerActivity::compareEpisodes);
             episodes.clear();
-            episodes.addAll(richest.urls.keySet());
-            // urls 是 HashMap（无序）：集数必须显式排序——第N集按数字序，
-            // 否则剧集面板里集数会乱序；无数字的（电影版本）把「正片」排最前。
-            java.util.Collections.sort(episodes, (a, b) -> {
-                int na = epNum(a), nb = epNum(b);
-                if (na != nb) return Integer.compare(na, nb);
-                boolean za = a.contains("正片"), zb = b.contains("正片");
-                if (za != zb) return za ? -1 : 1;
-                return a.compareTo(b);
-            });
+            episodes.addAll(allEpisodes);
+            episodes.sort(PlayerActivity::compareEpisodes);
             // 恢复上次进度（同片同站）
             restoreState();
             harvestDone = true;
@@ -485,6 +499,14 @@ public class PlayerActivity extends Activity {
             Log.e(TAG, "harvest parse fail", e);
             setLoading(true, "线路数据解析失败，请返回重试");
         }
+    }
+
+    private static int compareEpisodes(String a, String b) {
+        int na = epNum(a), nb = epNum(b);
+        if (na != nb) return Integer.compare(na, nb);
+        boolean za = a.contains("正片"), zb = b.contains("正片");
+        if (za != zb) return za ? -1 : 1;
+        return a.compareTo(b);
     }
 
     /** 集名里的第一个数字（第12集 → 12）；没有数字返回 MAX（排最后） */
@@ -505,7 +527,13 @@ public class PlayerActivity extends Activity {
             int ep = Integer.parseInt(p[0]);
             int ln = Integer.parseInt(p[1]);
             long pos = Long.parseLong(p[2]);
-            if (ep >= 0 && ep < episodes.size()) curEp = ep;
+            String name = p.length >= 4
+                    ? new String(java.util.Base64.getUrlDecoder().decode(p[3]),
+                            java.nio.charset.StandardCharsets.UTF_8)
+                    : ep >= 0 && ep < legacyEpisodes.size() ? legacyEpisodes.get(ep) : null;
+            int mapped = name == null ? -1 : episodes.indexOf(name);
+            if (mapped < 0) return;
+            curEp = mapped;
             if (ln >= 0 && ln < lines.size()
                     && lines.get(ln).urls.containsKey(episodes.get(curEp))) curLine = ln;
             if (pos > 10000) pendingSeekMs = pos;
@@ -523,8 +551,10 @@ public class PlayerActivity extends Activity {
         try {
             long pos = vp.getTime();
             if (pos < 0) return;
+            String name = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(
+                    episodes.get(playingEp).getBytes(java.nio.charset.StandardCharsets.UTF_8));
             prefs.edit().putString("resume_" + videoId,
-                    playingEp + "|" + playingLine + "|" + pos).apply();
+                    playingEp + "|" + playingLine + "|" + pos + "|" + name).apply();
         } catch (Exception ignored) { }
     }
 
@@ -585,6 +615,12 @@ public class PlayerActivity extends Activity {
                     break;
                 }
                 case org.videolan.libvlc.MediaPlayer.Event.Playing: {
+                    if (!foreground) {
+                        // 已在途的 play 与 onPause 交错时，暂停命令仍在播放器线程串行执行。
+                        playerExecutor.execute(() -> {
+                            if (!foreground && !playerReleased && gen == playingGeneration) vp.pause();
+                        });
+                    }
                     if (delayedPlayError != null) {
                         handler.removeCallbacks(delayedPlayError);
                         delayedPlayError = null;
@@ -639,9 +675,11 @@ public class PlayerActivity extends Activity {
         final int gen = playGeneration.incrementAndGet();
         final int targetEp = curEp;
         final int targetLine = curLine;
+        pendingStart = true;
         prepared = false;
         setLoading(true, "正在缓冲：" + episodes.get(curEp) + " · " + lines.get(curLine).label + "…");
         updateSubText();
+        if (!foreground) return;
         // 播放器创建与视图挂载留在主线程（VLCVideoLayout 属 View 体系）；
         // 会阻塞的 stop/setMedia/play 整段投串行执行器（H1）。
         ensureVlc();
@@ -651,7 +689,7 @@ public class PlayerActivity extends Activity {
         playerExecutor.execute(() -> {
             // 已有更新一代在排队时本任务直接作废：不 stop、不换 Media，
             // 后一代任务完成真正的切换（串行队列保证最终态是最新一代）。
-            if (gen != playGeneration.get() || playerReleased) return;
+            if (gen != playGeneration.get() || playerReleased || !foreground) return;
             try {
                 // saveState 读 getTime：须在 stop 之前、与 stop 同任务。
                 // 仅在确有旧媒体在播时才存（playingEp>=0）——首次播放时存量
@@ -661,7 +699,7 @@ public class PlayerActivity extends Activity {
                 player.setEventListener(null);
                 player.stop();
                 playingGeneration = -1;
-                if (gen != playGeneration.get() || playerReleased) return;
+                if (gen != playGeneration.get() || playerReleased || !foreground) return;
                 Media media = new Media(lc, android.net.Uri.parse(url));
                 // 硬解优先：MediaCodec（NDK→JNI），不行自动回退软解
                 media.addOption(":codec=mediacodec_ndk,mediacodec_jni,any");
@@ -672,7 +710,8 @@ public class PlayerActivity extends Activity {
                 playingLine = targetLine;
                 playingGeneration = gen;
                 player.setEventListener(listenerForSession(gen));
-                if (gen != playGeneration.get() || playerReleased) return;
+                if (gen != playGeneration.get() || playerReleased || !foreground) return;
+                pendingStart = false;
                 player.play();
             } catch (Exception e) {
                 Log.e(TAG, "play failed", e);
@@ -739,21 +778,31 @@ public class PlayerActivity extends Activity {
         saveState();
         lastAutoSwitchAt = 0;
         curEp = ep;
+        lineLatency.clear();
+        lineProbeDone.clear();
         pendingSeekMs = -1;
         // 优先沿用同一条线路，没有这一集就找一条有的
         if (!lines.get(curLine).urls.containsKey(episodes.get(ep))) {
             int alt = findLineForEpisode(ep, -1);
+            if (alt < 0) {
+                // 手动选集允许重试此前标坏的线路。
+                for (int i = 0; i < lines.size(); i++) {
+                    if (lines.get(i).urls.containsKey(episodes.get(ep))) { alt = i; break; }
+                }
+            }
             if (alt >= 0) curLine = alt;
         }
-        playUrlInternal(currentUrl());
+        String url = currentUrl();
+        if (url != null) playUrlInternal(url);
     }
 
     private void switchLine(int line, boolean keepPos, long pos) {
+        String url = lines.get(line).urls.get(episodes.get(curEp));
+        if (url == null) return;
         lastAutoSwitchAt = 0;   // 手动切线不受自动换线节流限制
         curLine = line;
         pendingSeekMs = keepPos && pos > 0 ? pos : -1;
-        String url = currentUrl();
-        if (url != null) playUrlInternal(url);
+        playUrlInternal(url);
     }
 
     private long safePos() {
@@ -804,35 +853,48 @@ public class PlayerActivity extends Activity {
         for (int i = 0; i < lines.size(); i++) {
             final int idx = i;
             final String url = lines.get(idx).urls.get(epName);
-            if (url == null || Boolean.TRUE.equals(lineProbeDone.get(idx))) continue;
+            String probeKey = idx + "|" + epName;
+            if (url == null || Boolean.TRUE.equals(lineProbeDone.get(idx))
+                    || !lineProbesInFlight.add(probeKey)) continue;
             probePool.execute(() -> {
-                long t0 = System.currentTimeMillis();
+                long t0 = SystemClock.elapsedRealtime();
                 int result = -1;
                 try {
                     HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
                     c.setConnectTimeout(2500);
                     c.setReadTimeout(3000);
                     c.setRequestProperty("User-Agent", DESKTOP_UA);
-                    c.connect();
+                    c.setRequestProperty("Referer", "https://www.ikanbot.com/");
                     int code = c.getResponseCode();
-                    if (code >= 200 && code < 400) {
-                        InputStream in = c.getInputStream();
-                        byte[] buf = new byte[256];
-                        int n = in.read(buf);
-                        if (n > 0 && new String(buf, 0, n).contains("#EXTM3U")) {
-                            result = (int) (System.currentTimeMillis() - t0);
-                        } else if (n > 0) {
-                            result = (int) (System.currentTimeMillis() - t0);
+                    if (code >= 200 && code < 300) {
+                        try (InputStream in = c.getInputStream()) {
+                            byte[] header = new byte[11];
+                            int n = 0;
+                            while (n < header.length) {
+                                int b = in.read();
+                                if (b < 0 || b == '\n') break;
+                                header[n++] = (byte) b;
+                            }
+                            String firstLine = new String(header, 0, n,
+                                    java.nio.charset.StandardCharsets.UTF_8).replace("\r", "");
+                            if (firstLine.startsWith("\uFEFF")) firstLine = firstLine.substring(1);
+                            if ("#EXTM3U".equals(firstLine)) {
+                                result = (int) (SystemClock.elapsedRealtime() - t0);
+                            }
                         }
-                        in.close();
+                    } else {
+                        InputStream error = c.getErrorStream();
+                        if (error != null) error.close();
                     }
-                    // 流已关闭，连接由平台连接池回收；不再 disconnect 销毁它
                 } catch (Exception e) {
                     result = -1;
                 }
                 final int r = result;
                 handler.post(() -> {
                     if (playerReleased) return;
+                    lineProbesInFlight.remove(probeKey);
+                    if (!episodes.get(curEp).equals(epName)
+                            || badSources.contains(curEp + "|" + idx)) return;
                     lineLatency.put(idx, r);
                     lineProbeDone.put(idx, true);
                     if (panelOpen && !panelEpMode) refreshLineList();
@@ -929,7 +991,12 @@ public class PlayerActivity extends Activity {
     }
 
     private void refreshLineList() {
-        lineList.setAdapter(new LineAdapter());
+        if (lineAdapter == null) {
+            lineAdapter = new LineAdapter();
+            lineList.setAdapter(lineAdapter);
+        } else {
+            lineAdapter.notifyDataSetChanged();
+        }
     }
 
     private void closePanel() {
@@ -994,10 +1061,18 @@ public class PlayerActivity extends Activity {
     // ================= 按键 =================
 
     private int seekRepeat = 0;
+    private boolean okTracking = false;
+    private boolean okLongHandled = false;
 
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
         int code = event.getKeyCode();
+        boolean ok = code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER;
+        if (ok && event.getAction() == KeyEvent.ACTION_UP && okTracking) {
+            okTracking = false;
+            if (!okLongHandled && !event.isCanceled()) togglePlay();
+            return true;
+        }
         if (event.getAction() == KeyEvent.ACTION_DOWN) {
             if (panelOpen) {
                 switch (code) {
@@ -1015,14 +1090,17 @@ public class PlayerActivity extends Activity {
             switch (code) {
                 case KeyEvent.KEYCODE_DPAD_CENTER:
                 case KeyEvent.KEYCODE_ENTER:
-                    if (event.isLongPress() || event.getRepeatCount() >= 8) {
+                    if (event.getRepeatCount() == 0) {
+                        okTracking = true;
+                        okLongHandled = false;
+                    } else if (okTracking && !okLongHandled
+                            && (event.isLongPress() || event.getRepeatCount() >= 8)) {
+                        okLongHandled = true;
                         speedIdx = (speedIdx + 1) % SPEEDS.length;
                         applySpeed();
-                        if (vp != null && !vp.isPlaying() && prepared) { vp.play(); }
+                        if (vp != null && !vp.isPlaying() && prepared && foreground) { vp.play(); }
                         showOsd("倍速 " + SPEEDS[speedIdx] + "x");
-                        return true;
                     }
-                    togglePlay();
                     return true;
                 case KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE:
                 case KeyEvent.KEYCODE_MEDIA_PLAY:
@@ -1094,10 +1172,22 @@ public class PlayerActivity extends Activity {
     }
 
     @Override
+    protected void onResume() {
+        super.onResume();
+        foreground = true;
+        if (pendingStart && dataReady && currentUrl() != null) playUrlInternal(currentUrl());
+    }
+
+    @Override
     protected void onPause() {
+        foreground = false;
+        okTracking = false;
         super.onPause();
         saveState();
-        if (vp != null && vp.isPlaying()) { vp.pause(); userPaused = true; }
+        playerExecutor.execute(() -> {
+            if (!foreground && !playerReleased && vp != null && vp.isPlaying()) vp.pause();
+        });
+        userPaused = true;
     }
 
     @Override

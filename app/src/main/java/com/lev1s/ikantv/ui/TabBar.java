@@ -15,7 +15,7 @@ import com.lev1s.ikantv.data.IkanDataSource;
  * header，能在五个选项卡之间快速跳动）。
  *
  * 顶栏切换先清栈回已有首页，再打开目标页；普通返回保留原有层级。
- * 首页始终留在目标页下方，当前页标签点击无动作。
+ * 首页始终留在目标页下方；搜索结果页的搜索标签返回输入页。
  */
 public final class TabBar {
 
@@ -60,7 +60,7 @@ public final class TabBar {
     }
 
     private static void go(Activity act, Tab tab, Tab current) {
-        if (tab == current) return;
+        if (tab == current && !(tab == Tab.SEARCH && act instanceof NativeGridActivity)) return;
         if (tab == Tab.HOME) {
             goHome(act);
             return;

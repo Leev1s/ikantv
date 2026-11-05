@@ -146,6 +146,11 @@ public final class IkanHtmlParser {
             if (it != null) page.items.add(it);
         }
         page.nextPageUrl = findNextPage(doc, pageUrl);
+        // 站点搜索页明确的空结果提示；空白页或模板变更仍交给调用方报告解析失败。
+        page.searchNoResults = page.items.isEmpty()
+                && doc.selectFirst("h1") != null
+                && doc.selectFirst("h1").text().startsWith("搜索：")
+                && doc.select("span").stream().anyMatch(e -> e.text().startsWith("没有搜索到结果"));
         return page;
     }
 
@@ -268,23 +273,56 @@ public final class IkanHtmlParser {
         int cur = pageOf(pageUrl);
         String best = null;
         int bestPage = Integer.MAX_VALUE;
-        for (Element a : doc.select("a[href]")) {
-            String href = a.attr("href");
+        for (Element a : doc.select(".page-more a[href], .pagination a[href]")) {
+            String href = a.absUrl("href");
+            if (!sameListing(pageUrl, href)) continue;
             int p = pageOf(href);
             if (p > cur && p < bestPage) {
                 bestPage = p;
-                best = a.absUrl("href");
+                best = href;
             }
         }
         return best;
     }
 
+    private static boolean sameListing(String current, String candidate) {
+        try {
+            java.net.URI a = new java.net.URI(current);
+            java.net.URI b = new java.net.URI(candidate);
+            if (a.getHost() == null || b.getHost() == null
+                    || !a.getHost().equalsIgnoreCase(b.getHost())
+                    || !a.getScheme().equalsIgnoreCase(b.getScheme())
+                    || a.getPort() != b.getPort()) return false;
+            String aPath = a.getPath().replaceFirst("-p-\\d+\\.html$", ".html");
+            String bPath = b.getPath().replaceFirst("-p-\\d+\\.html$", ".html");
+            return aPath.equals(bPath) && listingQuery(a).equals(listingQuery(b));
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private static List<String> listingQuery(java.net.URI uri) throws Exception {
+        List<String> parts = new ArrayList<>();
+        String query = uri.getRawQuery();
+        if (query != null) for (String part : query.split("&")) {
+            String[] pair = part.split("=", 2);
+            String key = java.net.URLDecoder.decode(pair[0], "UTF-8");
+            if ("p".equals(key) || "n".equals(key)) continue;
+            String value = pair.length > 1 ? java.net.URLDecoder.decode(pair[1], "UTF-8") : "";
+            parts.add(key + "=" + value);
+        }
+        java.util.Collections.sort(parts);
+        return parts;
+    }
+
     private static int pageOf(String url) {
         if (url == null) return 1;
-        Matcher m = PAGE_IN_PATH.matcher(url);
-        if (m.find()) return Integer.parseInt(m.group(1));
-        m = PAGE_IN_QUERY.matcher(url);
-        if (m.find()) return Integer.parseInt(m.group(1));
+        try {
+            Matcher m = PAGE_IN_PATH.matcher(url);
+            if (m.find()) return Integer.parseInt(m.group(1));
+            m = PAGE_IN_QUERY.matcher(url);
+            if (m.find()) return Integer.parseInt(m.group(1));
+        } catch (NumberFormatException ignored) { }
         return 1;
     }
 }

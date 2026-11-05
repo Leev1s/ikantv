@@ -11,6 +11,8 @@ public class FetchException extends Exception {
         /** 疑似被 Cloudflare 人机校验拦截：原生 HTTP 没有执行 JS 挑战的能力，
          *  UI 层在应用内提示并引导稍后重试（本应用没有原站模式可降级） */
         CHALLENGED,
+        /** 响应正文超过安全上限。 */
+        RESPONSE_TOO_LARGE,
         /** 页面拿到了但解析出 0 条目：大概率站点改版或返回了异常页，
          *  UI 层同样在应用内提示并允许重试 */
         PARSE_EMPTY

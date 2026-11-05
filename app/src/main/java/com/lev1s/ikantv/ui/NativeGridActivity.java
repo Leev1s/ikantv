@@ -55,7 +55,6 @@ public class NativeGridActivity extends NativeBrowseActivity {
     private LinearLayout skeleton;
     private PosterLoader posterLoader;
     private final Handler handler = new Handler(Looper.getMainLooper());
-    private final Runnable skeletonFailsafe = () -> hideSkeleton();
 
     private String kind;
     private String firstUrl;
@@ -67,6 +66,13 @@ public class NativeGridActivity extends NativeBrowseActivity {
     private int cardWidthDp;
     private final List<PosterCardView> rowBuffer = new ArrayList<>();
     private boolean firstFocusDone = false;
+    private final Runnable skeletonFailsafe = () -> {
+        if (!loadingPage) return;
+        ++loadGen;
+        loadingPage = false;
+        hideSkeleton();
+        showFooterRetry("加载时间较长，点这里重试");
+    };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -139,7 +145,7 @@ public class NativeGridActivity extends NativeBrowseActivity {
         emptyView.setText(msg);
         emptyView.setVisibility(View.VISIBLE);
         emptyView.post(() -> {
-            if (!destroyed) emptyView.requestFocus();
+            if (!destroyed && interactionCount == 0) emptyView.requestFocus();
         });
     }
 
@@ -260,7 +266,7 @@ public class NativeGridActivity extends NativeBrowseActivity {
                         hideSkeleton();
                         nextPageUrl = page.nextPageUrl;
                         appendItems(page.items);
-                        if (page.items.isEmpty()) {
+                        if (page.items.isEmpty() && nextPageUrl == null) {
                             showEmpty(KIND_SEARCH.equals(kind)
                                     ? "没有搜到「" + query + "」，换个片名试试（建议用中文全名）"
                                     : "这里暂时没有内容");
@@ -304,7 +310,7 @@ public class NativeGridActivity extends NativeBrowseActivity {
                     footer.setText("这一页没加载出来，点这里重试");
                     footer.setVisibility(View.VISIBLE);
                     footer.setFocusable(true);
-                    footer.requestFocus();
+                    if (interactionCount == 0) footer.requestFocus();
                 });
             }
         }).start();
@@ -341,7 +347,7 @@ public class NativeGridActivity extends NativeBrowseActivity {
         footer.setText(msg);
         footer.setVisibility(View.VISIBLE);
         footer.setFocusable(true);
-        footer.requestFocus();
+        if (interactionCount == 0) footer.requestFocus();
     }
 
     private void updateFooter() {
@@ -352,7 +358,9 @@ public class NativeGridActivity extends NativeBrowseActivity {
             // 免得它变成列表末尾一个无意义的焦点站（UX 评审 R3）
             footer.setFocusable(false);
         } else {
-            footer.setVisibility(View.GONE);
+            footer.setText("加载更多");
+            footer.setFocusable(true);
+            footer.setVisibility(View.VISIBLE);
         }
     }
 
@@ -507,7 +515,7 @@ public class NativeGridActivity extends NativeBrowseActivity {
         if (firstFocusDone) return;
         firstFocusDone = true;
         container.post(() -> {
-            if (destroyed) return;
+            if (destroyed || interactionCount != 0) return;
             View f = findFirstFocusable(container);
             if (f != null) f.requestFocus();
         });

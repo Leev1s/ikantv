@@ -83,14 +83,15 @@ public class PosterCardView extends LinearLayout {
         titleView.setTextColor(0xFFE8EAED);
         titleView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
         // 顶对齐：单行/双行片名共用同一起始基线，行与行的节奏才整齐；
-        // 高度固定两行整高 47dp——16sp 中文字体一行实测约 23dp，旧值 40dp
-        // 装不下两行整字、第二行底部被裁（2026-11-04 Jasen 指出）；
-        // 超过两行的长名才在第二行尾省略
+        // 默认至少 47dp，随系统字体缩放扩展到两行整高；
+        // 超过两行的长名在第二行尾省略。
         titleView.setGravity(Gravity.CENTER_HORIZONTAL | Gravity.TOP);
         titleView.setMaxLines(2);
         titleView.setEllipsize(TextUtils.TruncateAt.END);
+        titleView.setMinLines(2);
+        titleView.setMinHeight(dp(47));
         LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(
-                LayoutParams.MATCH_PARENT, dp(47));
+                LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT);
         tp.topMargin = dp(2);
         addView(titleView, tp);
 
