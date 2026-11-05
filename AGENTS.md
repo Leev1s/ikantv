@@ -116,3 +116,10 @@ or scope, e.g. `2.8.1 片名两行整字 + 行距收紧` or
 `fix(native): 历史迁移桥永不触发的缺陷`. Keep commits small and scoped;
 one UI tune or one fix per commit, with the reason in the body when it
 isn't obvious from the subject.
+
+**Commit identity (do not improvise)**: author/committer is the repo owner
+`Leev1s <83260380+Leev1s@users.noreply.github.com>` — GitHub links commits
+by email, and the bare `username@users.noreply.github.com` form without
+the numeric ID once mis-attributed commits to a stranger's account.
+Commits substantially authored by an AI agent add a trailer line
+`Co-authored-by: Muse <muse@localhost>` after a blank line.
