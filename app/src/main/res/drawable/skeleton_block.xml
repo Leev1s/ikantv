@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
-    <corners android:radius="10dp" />
+    <!-- 方角：与海报页无圆角定版一致（UX 评审 C5，旧值 10dp 与方角海报跳变） -->
+    <corners android:radius="0dp" />
     <solid android:color="#1E2126" />
 </shape>

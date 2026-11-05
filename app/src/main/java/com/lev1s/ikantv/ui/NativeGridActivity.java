@@ -111,6 +111,13 @@ public class NativeGridActivity extends Activity {
 
         buildSkeleton();
         buildTags();
+        // 空态按 OK = 重试加载：与首页错误文案、页脚重试同一约定（点这里再试
+        // 一次），不再是聚焦后无动作的死胡同（UX 评审 C1）。搜索无结果时
+        // 文案已提示换片名，重试只是重查同一关键词、无副作用，返回键回
+        // 搜索页改词的路径也在。
+        emptyView.setOnClickListener(v -> {
+            if (!loadingPage) loadFirst();
+        });
         footer.setOnClickListener(v -> {
             if (nextPageUrl != null && !loadingPage) loadNextPage();
             else if (!loadingPage) loadFirst();
@@ -137,18 +144,20 @@ public class NativeGridActivity extends Activity {
         });
     }
 
+    private final List<TextView> tagChips = new ArrayList<>();
+    private String[] tagUrls;
+
     private void buildTags() {
         String[] labels = getIntent().getStringArrayExtra(EXTRA_TAG_LABELS);
         String[] urls = getIntent().getStringArrayExtra(EXTRA_TAG_URLS);
         if (labels == null || urls == null || labels.length != urls.length) return;
+        tagUrls = urls;
         for (int i = 0; i < labels.length; i++) {
             final String url = urls[i];
             final String label = labels[i];
             TextView chip = new TextView(this);
             chip.setText(label);
             chip.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
-            chip.setTextColor(getColorStateList(R.color.chip_text));
-            chip.setBackgroundResource(R.drawable.chip_frame);
             chip.setFocusable(true);
             chip.setClickable(true);
             chip.setPadding(dp(16), dp(5), dp(16), dp(5));
@@ -160,9 +169,25 @@ public class NativeGridActivity extends Activity {
             chip.setOnClickListener(v -> {
                 if (url.equals(firstUrl)) return;
                 firstUrl = url;
+                refreshTagStyles();
                 loadFirst();
             });
+            tagChips.add(chip);
             tagRow.addView(chip);
+        }
+        refreshTagStyles();
+    }
+
+    /** 当前分类标签用顶栏同款当前态（chip_current 描边 + 琥珀字），切完分类
+     *  全页要有地方表明身在何处（UX 评审 C2；页名按设计是隐藏的）。 */
+    private void refreshTagStyles() {
+        for (int i = 0; i < tagChips.size(); i++) {
+            boolean current = tagUrls[i].equals(firstUrl);
+            TextView chip = tagChips.get(i);
+            chip.setBackgroundResource(current
+                    ? R.drawable.chip_current : R.drawable.chip_frame);
+            chip.setTextColor(getColorStateList(current
+                    ? R.color.chip_text_current : R.color.chip_text));
         }
     }
 
@@ -324,6 +349,9 @@ public class NativeGridActivity extends Activity {
         if (nextPageUrl == null) {
             footer.setText("— 没有更多了 —");
             footer.setVisibility(View.VISIBLE);
+            // 纯收尾文案不是操作入口：撤销报错重试时留下的可聚焦状态，
+            // 免得它变成列表末尾一个无意义的焦点站（UX 评审 R3）
+            footer.setFocusable(false);
         } else {
             footer.setVisibility(View.GONE);
         }

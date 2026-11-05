@@ -54,12 +54,19 @@
         </ScrollView>
     </LinearLayout>
 
+    <!-- 错误重试文案：本身是焦点落点，套 card_frame 琥珀描边保证焦点可见
+         （UX 评审 C1）；内边距让文字不贴描边 -->
     <TextView
         android:id="@+id/error_text"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_gravity="center"
+        android:background="@drawable/card_frame"
         android:gravity="center"
+        android:paddingLeft="28dp"
+        android:paddingRight="28dp"
+        android:paddingTop="16dp"
+        android:paddingBottom="16dp"
         android:textColor="#E8EAED"
         android:textSize="17sp"
         android:visibility="gone" />

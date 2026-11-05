@@ -23,12 +23,19 @@ import java.util.concurrent.Executors;
 
 /**
  * 轻量海报加载（按可行性报告选型自研，不引 Glide/Picasso 以适配手工构建链）：
- * 内存 LRU + 磁盘缓存两级，按显示尺寸降采样解码（目标宽 264px，
- * 海报实际显示约 130dp×1.33–2.0 倍），候选 URL 链逐个回退。
+ * 内存 LRU + 磁盘缓存两级，按显示尺寸降采样解码（目标宽见 REQ_WIDTH），
+ * 候选 URL 链逐个回退。下载不调用 disconnect()，响应流读尽关闭后连接回
+ * 平台连接池复用（性能评审 P1：海报候选首选恒为同一 host，逐张重付
+ * TCP+TLS 握手是网格页出图慢的主因之一）。
  */
 public class PosterLoader {
 
-    private static final int REQ_WIDTH = 264;
+    // 解码目标宽（px）：海报卡内图宽 = 卡宽 − 10dp 内边距。720p UI 下卡宽
+    // 随密度在约 80–134dp 间浮动，内图约 70–124dp，折算物理像素约
+    // 140–250px（密度 1.33–2.0）。取 240 使采样后的解码宽落在 [240, 480)，
+    // 覆盖最高密度下的显示需求又不至于普遍 2 倍以上过采样（性能评审 P3：
+    // 旧值 264 时解码宽落在 [264, 528)，单张位图 0.42–1.67MB 挤占 LRU）。
+    private static final int REQ_WIDTH = 240;
     private static PosterLoader instance;
 
     public static synchronized PosterLoader get(Context ctx) {
@@ -43,7 +50,12 @@ public class PosterLoader {
 
     private PosterLoader(Context ctx) {
         int maxKb = (int) (Runtime.getRuntime().maxMemory() / 1024);
-        memCache = new LruCache<String, Bitmap>(Math.max(8 * 1024, maxKb / 8)) {
+        // 容量按「至少装下一整页网格」定：解码宽 240–480px 的海报位图单张
+        // 约 0.35–1.4MB（典型源图落在 250–340px 宽、约 0.4–0.7MB），48 张
+        // 一页约 19–33MB。取堆上限 1/4（128MB 堆 → 32MB）覆盖一页且滚动
+        // 回头不至于整页重解码（性能评审 P3：旧值 1/8 只能装 10–38 张），
+        // 下限 16MB 不低于旧版在 128MB 堆上的实际容量。
+        memCache = new LruCache<String, Bitmap>(Math.max(16 * 1024, maxKb / 4)) {
             @Override protected int sizeOf(String key, Bitmap bmp) {
                 return bmp.getByteCount() / 1024;
             }
@@ -167,7 +179,14 @@ public class PosterLoader {
             c.setReadTimeout(9000);
             c.setRequestProperty("User-Agent", HttpFetcher.DESKTOP_UA);
             c.setRequestProperty("Referer", "https://www.ikanbot.com/");
-            if (c.getResponseCode() != 200) return null;
+            if (c.getResponseCode() != 200) {
+                // 非 200 也把错误流关掉，连接才有机会回池复用
+                try (InputStream es = c.getErrorStream()) {
+                    //noinspection StatementWithEmptyBody
+                    while (es != null && es.read(new byte[4096]) > 0) { }
+                } catch (Exception ignored) { }
+                return null;
+            }
             int declared = c.getContentLength();
             try (InputStream is = c.getInputStream()) {
                 ByteArrayOutputStream bos = new ByteArrayOutputStream();
@@ -184,9 +203,10 @@ public class PosterLoader {
             }
         } catch (Exception e) {
             return null;
-        } finally {
-            if (c != null) c.disconnect();
         }
+        // 不 disconnect()：成功路径的响应流已读尽并由 try-with-resources
+        // 关闭，连接回池供同 host 后续请求复用；异常路径流未读尽，平台会
+        // 自行弃用该连接，同样不泄漏（性能评审 P1）。
     }
 
     private Bitmap decodeBytes(byte[] data) {

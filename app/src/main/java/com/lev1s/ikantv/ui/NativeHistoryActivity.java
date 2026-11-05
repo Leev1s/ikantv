@@ -1,6 +1,7 @@
 package com.lev1s.ikantv.ui;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.os.Bundle;
 import android.util.TypedValue;
 import android.view.View;
@@ -52,12 +53,28 @@ public class NativeHistoryActivity extends Activity {
         // 与网格页同一定版公式：卡宽 = (布局宽 − 边距 48×2 − 间距 12×(列数−1)) ÷ 列数
         cardWidthDp = (screenDp - 96 - (COLUMNS - 1) * 12) / COLUMNS;
 
-        clearChip.setOnClickListener(v -> {
-            HistoryStore.clear(this);
-            render();
-        });
+        clearChip.setOnClickListener(v -> confirmClear());
+        // 空态按 OK = 回首页挑片（本页由顶栏进入，finish 即回到来处），
+        // 不让焦点停在无动作的文案上（UX 评审 C1）
+        emptyText.setOnClickListener(v -> finish());
 
         render();
+    }
+
+    /** 清空是不可逆操作且历史是核心资产，必须二次确认（UX 评审 C3）。
+     *  焦点默认落在「取消」，防的是焦点路径路过清空 chip 时的误按连发。 */
+    private void confirmClear() {
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setMessage("确定要清空全部观看历史吗？清掉就找不回来了。")
+                .setNegativeButton("取消", null)
+                .setPositiveButton("清空", (d, which) -> {
+                    HistoryStore.clear(this);
+                    render();
+                })
+                .create();
+        dialog.setOnShowListener(d ->
+                dialog.getButton(AlertDialog.BUTTON_NEGATIVE).requestFocus());
+        dialog.show();
     }
 
     // ---------------- 渲染 ----------------

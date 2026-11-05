@@ -89,10 +89,13 @@
                 android:paddingBottom="16dp" />
         </ScrollView>
 
+        <!-- 页脚：报错重试时是焦点落点，套 card_frame 琥珀描边保证焦点可见
+             （UX 评审 C1）；未聚焦时该 selector 是透明底，不改变常态外观 -->
         <TextView
             android:id="@+id/footer_text"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:background="@drawable/card_frame"
             android:gravity="center"
             android:paddingTop="6dp"
             android:paddingBottom="10dp"
@@ -108,8 +111,14 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_gravity="center"
+        android:background="@drawable/card_frame"
+        android:clickable="true"
         android:focusable="true"
         android:gravity="center"
+        android:paddingLeft="28dp"
+        android:paddingRight="28dp"
+        android:paddingTop="16dp"
+        android:paddingBottom="16dp"
         android:textColor="#E8EAED"
         android:textSize="16sp"
         android:visibility="gone" />
