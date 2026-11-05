@@ -7,6 +7,7 @@ import android.graphics.Color;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.util.Log;
 import android.view.KeyEvent;
 import android.view.View;
@@ -43,6 +44,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * 原生播放器：针对这台 Amlogic 盒子（Android 9）用 libVLC 内核播 HLS——
@@ -86,8 +88,8 @@ public class PlayerActivity extends Activity {
     private final Map<Integer, Boolean> lineProbeDone = new HashMap<>();
 
     // ---------- 播放器（libVLC 现成播放器内核：HTTPS + AES-128 HLS + MediaCodec 硬解） ----------
-    private LibVLC libVlc;
-    private org.videolan.libvlc.MediaPlayer vp;
+    private volatile LibVLC libVlc;
+    private volatile org.videolan.libvlc.MediaPlayer vp;
     private org.videolan.libvlc.util.VLCVideoLayout surface;
     private boolean dataReady = false;
     private boolean prepared = false;
@@ -119,6 +121,24 @@ public class PlayerActivity extends Activity {
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final ExecutorService probePool = Executors.newFixedThreadPool(4);
+    // 播放器串行执行器（H1）：会阻塞的 libVLC 调用（stop/setMedia/play/release）
+    // 只在这里单线程串行执行，主线程永不直接 stop——3.x 的 stop() 同步阻塞
+    // 到输入线程退出，正是历史「切源 ANR」的机制。
+    private final ExecutorService playerExecutor = Executors.newSingleThreadExecutor(r -> {
+        Thread th = new Thread(r, "vlc-player");
+        th.setDaemon(true);
+        return th;
+    });
+    // 播放代际号（H2）：playUrlInternal 入口自增；libVLC 事件在原生回调线程
+    // 捕获当时的代值、随 runnable 带回主线程比对，过期事件直接丢弃。
+    private final AtomicInteger playGeneration = new AtomicInteger(0);
+    private volatile boolean playerReleased = false;
+    // 播放器里实际在播的集/线（setMedia 时更新）：saveState 以它为准，
+    // 切集先改 curEp 也不会把旧集位置写到新集名下（M1）。
+    private volatile int playingEp = -1;
+    private volatile int playingLine = -1;
+    // 自动换线节流（H2）：上次自动换线时刻；手动切集/切线清零、不受限。
+    private volatile long lastAutoSwitchAt = 0;
     private SharedPreferences prefs;
 
     private final Runnable hideChrome = () -> {
@@ -487,12 +507,16 @@ public class PlayerActivity extends Activity {
     }
 
     private void saveState() {
+        // 集/线读 playingEp/playingLine（实际在播的），不读 curEp/curLine：
+        // 切集会先改 curEp，读了就会把旧集位置记到新集名下（M1）。
+        // 曾在此写的 lastline_ 键全仓无读取方，已随迭代二删除。
         if (videoId.isEmpty() || vp == null) return;
         try {
             long pos = Math.max(0, vp.getTime());
+            int ep = playingEp >= 0 ? playingEp : curEp;
+            int ln = playingLine >= 0 ? playingLine : curLine;
             prefs.edit().putString("resume_" + videoId,
-                    curEp + "|" + curLine + "|" + pos).apply();
-            prefs.edit().putInt("lastline_" + videoId, curLine).apply();
+                    ep + "|" + ln + "|" + pos).apply();
         } catch (Exception ignored) { }
     }
 
@@ -539,9 +563,13 @@ public class PlayerActivity extends Activity {
     }
 
     private final org.videolan.libvlc.MediaPlayer.EventListener vlcEventListener = event -> {
-        // VLC 事件在原生线程回调，UI 操作统一切回主线程
+        // VLC 事件在原生线程回调：在这里先捕获当前代际号，随 runnable 带回
+        // 主线程比对——旧 Media 的迟到事件在代际变更后一律丢弃（H2）。
+        // UI 操作统一切回主线程。
+        final int gen = playGeneration.get();
         handler.post(() -> {
-            if (vp == null) return;
+            if (vp == null || playerReleased) return;
+            if (gen != playGeneration.get()) return;
             switch (event.type) {
                 case org.videolan.libvlc.MediaPlayer.Event.Buffering: {
                     float pc = event.getBuffering();
@@ -572,7 +600,11 @@ public class PlayerActivity extends Activity {
                 case org.videolan.libvlc.MediaPlayer.Event.EndReached: {
                     if (curEp + 1 < episodes.size()) {
                         showOsd("本集播完，自动播放下一集");
-                        handler.postDelayed(() -> switchEpisode(curEp + 1, false), 1200);
+                        // 延迟期内若已切集/切线（代际已变），过期动作作废
+                        handler.postDelayed(() -> {
+                            if (gen != playGeneration.get() || playerReleased) return;
+                            switchEpisode(curEp + 1, false);
+                        }, 1200);
                     } else {
                         showOsd("全部播完");
                         showChrome();
@@ -591,27 +623,60 @@ public class PlayerActivity extends Activity {
     };
 
     private void playUrlInternal(String url) {
-        stopPlayback();
+        if (playerReleased) return;
+        final int gen = playGeneration.incrementAndGet();
+        final int targetEp = curEp;
+        final int targetLine = curLine;
         prepared = false;
         setLoading(true, "正在缓冲：" + episodes.get(curEp) + " · " + lines.get(curLine).label + "…");
-        try {
-            ensureVlc();
-            Media media = new Media(libVlc, android.net.Uri.parse(url));
-            // 硬解优先：MediaCodec（NDK→JNI），不行自动回退软解
-            media.addOption(":codec=mediacodec_ndk,mediacodec_jni,any");
-            media.addOption(":network-caching=2000");
-            vp.setMedia(media);
-            media.release();
-            vp.play();
-        } catch (Exception e) {
-            Log.e(TAG, "play failed", e);
-            onPlayError("播放器异常");
-            return;
-        }
         updateSubText();
+        // 播放器创建与视图挂载留在主线程（VLCVideoLayout 属 View 体系）；
+        // 会阻塞的 stop/setMedia/play 整段投串行执行器（H1）。
+        ensureVlc();
+        final org.videolan.libvlc.MediaPlayer player = vp;
+        final LibVLC lc = libVlc;
+        if (player == null || lc == null) return;
+        playerExecutor.execute(() -> {
+            // 已有更新一代在排队时本任务直接作废：不 stop、不换 Media，
+            // 后一代任务完成真正的切换（串行队列保证最终态是最新一代）。
+            if (gen != playGeneration.get() || playerReleased) return;
+            try {
+                // saveState 读 getTime：须在 stop 之前、与 stop 同任务。
+                // 仅在确有旧媒体在播时才存（playingEp>=0）——首次播放时存量
+                // 续播位置还没被消费，不能拿新播放器的 0 位置把它覆掉。
+                if (playingEp >= 0) {
+                    try { saveState(); } catch (Exception ignored) { }
+                }
+                try { player.stop(); } catch (Exception ignored) { }
+                Media media = new Media(lc, android.net.Uri.parse(url));
+                // 硬解优先：MediaCodec（NDK→JNI），不行自动回退软解
+                media.addOption(":codec=mediacodec_ndk,mediacodec_jni,any");
+                media.addOption(":network-caching=2000");
+                player.setMedia(media);
+                media.release();
+                playingEp = targetEp;
+                playingLine = targetLine;
+                player.play();
+            } catch (Exception e) {
+                Log.e(TAG, "play failed", e);
+                handler.post(() -> {
+                    if (gen == playGeneration.get() && !playerReleased) {
+                        onPlayError("播放器异常");
+                    }
+                });
+            }
+        });
     }
 
     private void onPlayError(String reason) {
+        // 自动换线节流（H2 / AGENTS 口径 1.5s）：窗口内不重复自动换线，
+        // 防迟到事件或连环错误短时间内把线路表扫穿；手动切换清零、不受限。
+        long now = SystemClock.uptimeMillis();
+        if (now - lastAutoSwitchAt < 1500) {
+            Log.w(TAG, "auto switch throttled: " + reason);
+            return;
+        }
+        lastAutoSwitchAt = now;
         badSources.add(curEp + "|" + curLine);
         lineLatency.put(curLine, -1);
         lineProbeDone.put(curLine, true);
@@ -640,6 +705,10 @@ public class PlayerActivity extends Activity {
     }
 
     private void switchEpisode(int ep, boolean keepPos) {
+        // 先存旧集续播状态再改 curEp（M1）；saveState 已以 playingEp 为准，
+        // 这里的先行保存是第二层保险。切集同时清零自动换线节流。
+        saveState();
+        lastAutoSwitchAt = 0;
         curEp = ep;
         pendingSeekMs = -1;
         // 优先沿用同一条线路，没有这一集就找一条有的
@@ -651,6 +720,7 @@ public class PlayerActivity extends Activity {
     }
 
     private void switchLine(int line, boolean keepPos, long pos) {
+        lastAutoSwitchAt = 0;   // 手动切线不受自动换线节流限制
         curLine = line;
         pendingSeekMs = keepPos && pos > 0 ? pos : -1;
         String url = currentUrl();
@@ -669,26 +739,31 @@ public class PlayerActivity extends Activity {
         }
     }
 
-    /** 切集/切线时停掉当前流（播放器实例复用，只换 Media） */
-    private void stopPlayback() {
-        if (vp != null) {
-            try { saveState(); } catch (Exception ignored) { }
-            try { vp.stop(); } catch (Exception ignored) { }
-        }
-    }
-
+    /**
+     * 退出时释放播放器（H1）：stop/release 同样会阻塞，作为串行执行器的
+     * 收尾任务投递，onDestroy 不在主线程等它跑完；投递后关执行器，
+     * playerReleased 置位后不再接新播放任务、迟到事件不再碰已释放的播放器。
+     * 切集/切线时的 stop 已并入 playUrlInternal 的串行任务，不再有独立的
+     * 主线程 stopPlayback 路径。
+     */
     private void releasePlayer() {
-        if (vp != null) {
-            try { saveState(); } catch (Exception ignored) { }
-            try { vp.stop(); } catch (Exception ignored) { }
-            try { vp.detachViews(); } catch (Exception ignored) { }
-            try { vp.release(); } catch (Exception ignored) { }
+        playerReleased = true;
+        final org.videolan.libvlc.MediaPlayer player = vp;
+        final LibVLC lc = libVlc;
+        playerExecutor.execute(() -> {
+            if (player != null) {
+                try { saveState(); } catch (Exception ignored) { }
+                try { player.stop(); } catch (Exception ignored) { }
+                try { player.detachViews(); } catch (Exception ignored) { }
+                try { player.release(); } catch (Exception ignored) { }
+            }
             vp = null;
-        }
-        if (libVlc != null) {
-            try { libVlc.release(); } catch (Exception ignored) { }
+            if (lc != null) {
+                try { lc.release(); } catch (Exception ignored) { }
+            }
             libVlc = null;
-        }
+        });
+        playerExecutor.shutdown();
     }
 
     // ================= 线路测速 =================
