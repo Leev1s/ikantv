@@ -129,10 +129,14 @@ public class PlayerActivity extends Activity {
         th.setDaemon(true);
         return th;
     });
-    // 播放代际号（H2）：playUrlInternal 入口自增；libVLC 事件在原生回调线程
-    // 捕获当时的代值、随 runnable 带回主线程比对，过期事件直接丢弃。
+    // 每次切换绑定独立 listener；stop 完成后才安装新会话 listener。
     private final AtomicInteger playGeneration = new AtomicInteger(0);
     private volatile boolean playerReleased = false;
+    private volatile int playingGeneration = -1;
+    private volatile int confirmedGeneration = -1;
+    private Runnable delayedPlayError;
+    private int lastPositionGeneration = -1;
+    private long lastPositionMs = -1;
     // 播放器里实际在播的集/线（setMedia 时更新）：saveState 以它为准，
     // 切集先改 curEp 也不会把旧集位置写到新集名下（M1）。
     private volatile int playingEp = -1;
@@ -213,7 +217,7 @@ public class PlayerActivity extends Activity {
                 final JSONObject fo = o;
                 handler.post(() -> onHarvestJson(fo.toString()));
             } else {
-                handler.post(() -> { if (!harvestDone) startWebViewHarvest(); });
+                handler.post(() -> { if (!playerReleased && !harvestDone) startWebViewHarvest(); });
             }
         });
     }
@@ -326,6 +330,7 @@ public class PlayerActivity extends Activity {
     }
 
     private void startWebViewHarvest() {
+        if (playerReleased) return;
         harvestView = new WebView(this);
         WebSettings s = harvestView.getSettings();
         s.setJavaScriptEnabled(true);
@@ -347,14 +352,15 @@ public class PlayerActivity extends Activity {
 
             @Override public void onPageFinished(WebView view, String url) {
                 handler.postDelayed(() -> {
-                    if (harvestDone || harvestView == null) return;
+                    if (playerReleased || harvestDone || harvestView == null) return;
                     harvestView.evaluateJavascript("document.title", value -> {
+                        if (playerReleased || harvestView == null) return;
                         if (value != null && value.contains("Just a moment")) {
                             if (cfRetries < 3) {
                                 cfRetries++;
                                 setLoading(true, "网站正在校验，自动重试（" + cfRetries + "/3）…");
                                 handler.postDelayed(() -> {
-                                    if (harvestView != null) harvestView.loadUrl(playUrl);
+                                    if (!playerReleased && harvestView != null) harvestView.loadUrl(playUrl);
                                 }, 4000);
                             } else {
                                 setLoading(true, "网站校验暂时过不去，请返回后稍再再试");
@@ -364,7 +370,7 @@ public class PlayerActivity extends Activity {
                         harvestView.evaluateJavascript(HARVEST_JS, null);
                         // 兜底超时
                         handler.postDelayed(() -> {
-                            if (!harvestDone) setLoading(true, "线路获取较慢，仍在等待…（可返回重试）");
+                            if (!playerReleased && !harvestDone) setLoading(true, "线路获取较慢，仍在等待…（可返回重试）");
                         }, 20000);
                     });
                 }, 900);
@@ -415,7 +421,7 @@ public class PlayerActivity extends Activity {
     }
 
     private void onHarvestJson(String json) {
-        if (harvestDone) return;
+        if (playerReleased || harvestDone) return;
         try {
             JSONObject o = new JSONObject(json);
             if (o.has("error")) {
@@ -506,17 +512,19 @@ public class PlayerActivity extends Activity {
         } catch (Exception ignored) { }
     }
 
+    // 保存与 stop/setMedia 串行：身份和位置始终来自同一媒体会话。
     private void saveState() {
-        // 集/线读 playingEp/playingLine（实际在播的），不读 curEp/curLine：
-        // 切集会先改 curEp，读了就会把旧集位置记到新集名下（M1）。
-        // 曾在此写的 lastline_ 键全仓无读取方，已随迭代二删除。
-        if (videoId.isEmpty() || vp == null) return;
+        if (!playerReleased) playerExecutor.execute(this::saveStateOnPlayerThread);
+    }
+
+    private void saveStateOnPlayerThread() {
+        if (videoId.isEmpty() || vp == null || playingEp < 0 || playingGeneration < 0
+                || playingGeneration != confirmedGeneration) return;
         try {
-            long pos = Math.max(0, vp.getTime());
-            int ep = playingEp >= 0 ? playingEp : curEp;
-            int ln = playingLine >= 0 ? playingLine : curLine;
+            long pos = vp.getTime();
+            if (pos < 0) return;
             prefs.edit().putString("resume_" + videoId,
-                    ep + "|" + ln + "|" + pos).apply();
+                    playingEp + "|" + playingLine + "|" + pos).apply();
         } catch (Exception ignored) { }
     }
 
@@ -553,7 +561,6 @@ public class PlayerActivity extends Activity {
         }
         if (vp == null) {
             vp = new org.videolan.libvlc.MediaPlayer(libVlc);
-            vp.setEventListener(vlcEventListener);
             // 必须走带 VLCVideoLayout 的 attachViews：它会创建 VideoHelper 接管
             // 画面几何（按 DAR 等比摆放）；裸 SurfaceView 无参 attach 没有这层，
             // 画面会被底层填充口径裁掉边缘（2026-11-03 缩放研究实锤）。
@@ -562,12 +569,8 @@ public class PlayerActivity extends Activity {
         }
     }
 
-    private final org.videolan.libvlc.MediaPlayer.EventListener vlcEventListener = event -> {
-        // VLC 事件在原生线程回调：在这里先捕获当前代际号，随 runnable 带回
-        // 主线程比对——旧 Media 的迟到事件在代际变更后一律丢弃（H2）。
-        // UI 操作统一切回主线程。
-        final int gen = playGeneration.get();
-        handler.post(() -> {
+    private org.videolan.libvlc.MediaPlayer.EventListener listenerForSession(final int gen) {
+        return event -> handler.post(() -> {
             if (vp == null || playerReleased) return;
             if (gen != playGeneration.get()) return;
             switch (event.type) {
@@ -582,6 +585,11 @@ public class PlayerActivity extends Activity {
                     break;
                 }
                 case org.videolan.libvlc.MediaPlayer.Event.Playing: {
+                    if (delayedPlayError != null) {
+                        handler.removeCallbacks(delayedPlayError);
+                        delayedPlayError = null;
+                    }
+                    confirmedGeneration = gen;
                     prepared = true;
                     userPaused = false;
                     setLoading(false, "");
@@ -620,10 +628,14 @@ public class PlayerActivity extends Activity {
                     break;
             }
         });
-    };
+    }
 
     private void playUrlInternal(String url) {
         if (playerReleased) return;
+        if (delayedPlayError != null) {
+            handler.removeCallbacks(delayedPlayError);
+            delayedPlayError = null;
+        }
         final int gen = playGeneration.incrementAndGet();
         final int targetEp = curEp;
         final int targetLine = curLine;
@@ -644,10 +656,12 @@ public class PlayerActivity extends Activity {
                 // saveState 读 getTime：须在 stop 之前、与 stop 同任务。
                 // 仅在确有旧媒体在播时才存（playingEp>=0）——首次播放时存量
                 // 续播位置还没被消费，不能拿新播放器的 0 位置把它覆掉。
-                if (playingEp >= 0) {
-                    try { saveState(); } catch (Exception ignored) { }
-                }
-                try { player.stop(); } catch (Exception ignored) { }
+                saveStateOnPlayerThread();
+                // 清掉旧 listener 及其排队事件；stop 同步等待旧输入线程退出。
+                player.setEventListener(null);
+                player.stop();
+                playingGeneration = -1;
+                if (gen != playGeneration.get() || playerReleased) return;
                 Media media = new Media(lc, android.net.Uri.parse(url));
                 // 硬解优先：MediaCodec（NDK→JNI），不行自动回退软解
                 media.addOption(":codec=mediacodec_ndk,mediacodec_jni,any");
@@ -656,6 +670,9 @@ public class PlayerActivity extends Activity {
                 media.release();
                 playingEp = targetEp;
                 playingLine = targetLine;
+                playingGeneration = gen;
+                player.setEventListener(listenerForSession(gen));
+                if (gen != playGeneration.get() || playerReleased) return;
                 player.play();
             } catch (Exception e) {
                 Log.e(TAG, "play failed", e);
@@ -672,8 +689,16 @@ public class PlayerActivity extends Activity {
         // 自动换线节流（H2 / AGENTS 口径 1.5s）：窗口内不重复自动换线，
         // 防迟到事件或连环错误短时间内把线路表扫穿；手动切换清零、不受限。
         long now = SystemClock.uptimeMillis();
-        if (now - lastAutoSwitchAt < 1500) {
+        if (lastAutoSwitchAt != 0 && now - lastAutoSwitchAt < 1500) {
             Log.w(TAG, "auto switch throttled: " + reason);
+            if (delayedPlayError == null) {
+                final int gen = playGeneration.get();
+                delayedPlayError = () -> {
+                    delayedPlayError = null;
+                    if (!playerReleased && gen == playGeneration.get()) onPlayError(reason);
+                };
+                handler.postDelayed(delayedPlayError, 1500 - (now - lastAutoSwitchAt));
+            }
             return;
         }
         lastAutoSwitchAt = now;
@@ -684,6 +709,10 @@ public class PlayerActivity extends Activity {
         if (next >= 0) {
             Toast.makeText(this, lines.get(curLine).label + "播不了（" + reason + "），自动切换到"
                     + lines.get(next).label, Toast.LENGTH_LONG).show();
+            long pos = safePos();
+            if (pos <= 0 && lastPositionGeneration == playGeneration.get()) pos = lastPositionMs;
+            // 刚换上的线路尚未续播成功时保留上一条线路的位置。
+            if (pendingSeekMs <= 0 && pos > 0) pendingSeekMs = pos;
             curLine = next;
             playUrlInternal(currentUrl());
         } else {
@@ -752,7 +781,8 @@ public class PlayerActivity extends Activity {
         final LibVLC lc = libVlc;
         playerExecutor.execute(() -> {
             if (player != null) {
-                try { saveState(); } catch (Exception ignored) { }
+                saveStateOnPlayerThread();
+                try { player.setEventListener(null); } catch (Exception ignored) { }
                 try { player.stop(); } catch (Exception ignored) { }
                 try { player.detachViews(); } catch (Exception ignored) { }
                 try { player.release(); } catch (Exception ignored) { }
@@ -769,6 +799,7 @@ public class PlayerActivity extends Activity {
     // ================= 线路测速 =================
 
     private void probeAllLines() {
+        if (playerReleased) return;
         String epName = episodes.get(curEp);
         for (int i = 0; i < lines.size(); i++) {
             final int idx = i;
@@ -801,6 +832,7 @@ public class PlayerActivity extends Activity {
                 }
                 final int r = result;
                 handler.post(() -> {
+                    if (playerReleased) return;
                     lineLatency.put(idx, r);
                     lineProbeDone.put(idx, true);
                     if (panelOpen && !panelEpMode) refreshLineList();
@@ -848,6 +880,10 @@ public class PlayerActivity extends Activity {
         if (vp == null || !prepared) return;
         try {
             long pos = vp.getTime();
+            if (pos >= 0 && playingGeneration == playGeneration.get()) {
+                lastPositionGeneration = playingGeneration;
+                lastPositionMs = pos;
+            }
             long dur = vp.getLength();
             if (dur > 0) {
                 seekBar.setMax((int) dur);
@@ -1066,7 +1102,7 @@ public class PlayerActivity extends Activity {
 
     @Override
     protected void onDestroy() {
-        handler.removeCallbacks(tick);
+        handler.removeCallbacksAndMessages(null);
         releasePlayer();
         if (harvestView != null) { harvestView.destroy(); harvestView = null; }
         probePool.shutdownNow();

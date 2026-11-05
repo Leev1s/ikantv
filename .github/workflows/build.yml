@@ -59,7 +59,14 @@ jobs:
       - name: Verify APK (signature, package, version)
         run: |
           APK=build-manual/ikantv.apk
-          "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --print-certs "$APK"
+          certs=$("$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --print-certs "$APK")
+          printf '%s\n' "$certs"
+          expected=945801887001b69f1d0a557ff58f8263e6374a07584d257b0046e5687e9e21ff
+          digests=$(printf '%s\n' "$certs" | grep -E '^Signer #[0-9]+ certificate SHA-256 digest: ' | cut -d' ' -f6 | tr '[:upper:]' '[:lower:]')
+          if [ "$digests" != "$expected" ]; then
+            echo '::error::APK signing certificate does not match the expected release identity'
+            exit 1
+          fi
           "$ANDROID_HOME/build-tools/34.0.0/aapt2" dump badging "$APK" | head -5
           ls -lh "$APK"
 
