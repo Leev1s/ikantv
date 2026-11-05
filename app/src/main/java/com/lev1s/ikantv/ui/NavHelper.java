@@ -1,12 +1,12 @@
-package com.lev1s.ikanbottv.ui;
+package com.lev1s.ikantv.ui;
 
 import android.app.Activity;
 import android.content.Intent;
 import android.widget.Toast;
 
-import com.lev1s.ikanbottv.PlayerActivity;
-import com.lev1s.ikanbottv.data.HistoryStore;
-import com.lev1s.ikanbottv.data.VideoItem;
+import com.lev1s.ikantv.PlayerActivity;
+import com.lev1s.ikantv.data.HistoryStore;
+import com.lev1s.ikantv.data.VideoItem;
 
 /** 原生浏览层共用的跳转：点播契约与降级出口。 */
 public final class NavHelper {

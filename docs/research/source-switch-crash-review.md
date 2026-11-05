@@ -92,7 +92,7 @@
   → 输入线程卡在无超时的网络 read 里，迟迟不退出
   → 主线程在 libvlc_media_player_stop 内核等（数秒～数分钟量级）
   → 遥控输入无人处理 → InputDispatcher 报 ANR（主线程 5s 无响应）
-  → 系统杀掉 com.lev1s.ikanbottv 进程 → 用户重进 = 「APP 重启」
+  → 系统杀掉 com.lev1s.ikantv 进程 → 用户重进 = 「APP 重启」
   → 期间 saveState 已存的是 A 的旧进度，B 根本没开始播，无所谓「续播」
 ```
 
@@ -148,9 +148,9 @@ H2/H3 如何并入这条链：若旧源在用户点 B 的前后脚报出 `Encoun
 
 | 假设 | 抓取命令 / 特征签名 |
 |---|---|
-| H1 ANR | `adb logcat -d \| grep -E "ANR in com.lev1s.ikanbottv\|Application is not responding\|InputDispatcher"`；再看 `/data/anr/traces.txt`（盒子 adbd 为 root，可直接 `adb pull`）：主线程栈应停在 `org.videolan.libvlcjni` / `libvlc_media_player_stop` 附近的 native 帧，即实锤 |
+| H1 ANR | `adb logcat -d \| grep -E "ANR in com.lev1s.ikantv\|Application is not responding\|InputDispatcher"`；再看 `/data/anr/traces.txt`（盒子 adbd 为 root，可直接 `adb pull`）：主线程栈应停在 `org.videolan.libvlcjni` / `libvlc_media_player_stop` 附近的 native 帧，即实锤 |
 | H2 native 崩溃 | `adb logcat -d \| grep -E "Fatal signal\|SIGSEGV\|signal 11"`；`/data/tombstones/` 最新文件的 backtrace 应含 `libvlc.so / libvlcjni.so` 帧 |
-| H4 LMK/OOM | `adb logcat -d \| grep -iE "lowmemorykiller\|Killing.*ikanbottv\|Process com.lev1s.ikanbottv.*has died"` |
+| H4 LMK/OOM | `adb logcat -d \| grep -iE "lowmemorykiller\|Killing.*ikanbottv\|Process com.lev1s.ikantv.*has died"` |
 | Java 异常（排除项） | `adb logcat -d \| grep -A 20 "FATAL EXCEPTION"` 中出现本包名与 PlayerActivity 栈帧 |
 | 自家日志 | `adb logcat -d -s IkanPlayer` 看 `VLC encountered error` / `play failed` 的出现频率与切线动作的时间对应关系 |
 

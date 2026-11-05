@@ -1,4 +1,4 @@
-package com.lev1s.ikanbottv.ui;
+package com.lev1s.ikantv.ui;
 
 import android.app.Activity;
 import android.content.Intent;
@@ -6,8 +6,8 @@ import android.util.TypedValue;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
-import com.lev1s.ikanbottv.R;
-import com.lev1s.ikanbottv.data.IkanDataSource;
+import com.lev1s.ikantv.R;
+import com.lev1s.ikantv.data.IkanDataSource;
 
 /**
  * 全站统一顶栏标签（首页/搜索/电影/剧集/榜单/看过）：每个原生页面顶部同一套，

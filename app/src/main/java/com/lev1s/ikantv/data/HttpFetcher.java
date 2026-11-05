@@ -1,4 +1,4 @@
-package com.lev1s.ikanbottv.data;
+package com.lev1s.ikantv.data;
 
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;

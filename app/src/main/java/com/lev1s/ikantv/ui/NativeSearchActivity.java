@@ -1,4 +1,4 @@
-package com.lev1s.ikanbottv.ui;
+package com.lev1s.ikantv.ui;
 
 import android.app.Activity;
 import android.content.Intent;
@@ -9,7 +9,7 @@ import android.widget.EditText;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import com.lev1s.ikanbottv.R;
+import com.lev1s.ikantv.R;
 
 /** 原生搜片页：输入关键词 → 打开 NativeGridActivity 的搜索模式（模板 B 结果 + 游标翻页）。 */
 public class NativeSearchActivity extends Activity {

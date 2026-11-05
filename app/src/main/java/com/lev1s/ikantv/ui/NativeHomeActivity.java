@@ -1,4 +1,4 @@
-package com.lev1s.ikanbottv.ui;
+package com.lev1s.ikantv.ui;
 
 import android.app.Activity;
 import android.content.Intent;
@@ -15,11 +15,11 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import com.lev1s.ikanbottv.R;
-import com.lev1s.ikanbottv.data.FetchException;
-import com.lev1s.ikanbottv.data.IkanDataSource;
-import com.lev1s.ikanbottv.data.IkanDataSource.Section;
-import com.lev1s.ikanbottv.data.VideoItem;
+import com.lev1s.ikantv.R;
+import com.lev1s.ikantv.data.FetchException;
+import com.lev1s.ikantv.data.IkanDataSource;
+import com.lev1s.ikantv.data.IkanDataSource.Section;
+import com.lev1s.ikantv.data.VideoItem;
 
 import java.util.List;
 

@@ -35,11 +35,14 @@ upgrade in place only when versionCode increases and the signature matches.
 
 ## Architecture Notes
 
-- **Code package ≠ applicationId.** Code lives in `com.lev1s.ikanbottv`;
-  the applicationId is `com.lev1s.ikanbottv.native`. `native` is a Java
-  keyword, so this split is permanent. `build.sh` generates R with
-  aapt2 `--custom-package com.lev1s.ikanbottv`; Manifest activities use
-  fully-qualified class names. Do not "fix" this by renaming packages.
+- **One name everywhere: `com.lev1s.ikantv`** is both the code package
+  and the applicationId (since 2.8.2). R is generated into the manifest
+  package; Manifest activities use relative names (`.ui.NativeHomeActivity`).
+  Before 2.8.2 the code package was `com.lev1s.ikanbottv` and the
+  applicationId `com.lev1s.ikanbottv.native` (`native` is a Java keyword) —
+  that split is history, do not resurrect it. Exception: the string
+  literals `com.lev1s.ikanbottv` inside `NavHelper` name the *sibling*
+  WebView app and must stay exactly as they are.
 - **Player is libVLC 3.5.1** (`PlayerActivity`), not Media3/ExoPlayer.
   All libVLC calls (stop/setMedia/play) must stay serialized on the
   player's background executor: libVLC 3.x `stop()` is synchronous and

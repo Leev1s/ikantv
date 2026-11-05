@@ -1,12 +1,12 @@
-package com.lev1s.ikanbottv.data;
+package com.lev1s.ikantv.data;
 
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 
-import com.lev1s.ikanbottv.data.IkanDataSource.GridPage;
-import com.lev1s.ikanbottv.data.IkanDataSource.Section;
+import com.lev1s.ikantv.data.IkanDataSource.GridPage;
+import com.lev1s.ikantv.data.IkanDataSource.Section;
 
 import java.util.ArrayList;
 import java.util.List;

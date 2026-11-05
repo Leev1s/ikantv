@@ -4,8 +4,8 @@ ikanbot.com 的 Android TV 原生客户端：原生界面浏览
 （海报墙、分类、搜索、观看历史），播放走 libVLC 硬解。
 
 - 应用名：爱看电视·原生版
-- 包名（applicationId）：`com.lev1s.ikanbottv.native`
-- 当前版本：versionCode 2 / versionName 2.8.1
+- 包名（applicationId）：`com.lev1s.ikantv`
+- 当前版本：versionCode 3 / versionName 2.8.2
 - 系统要求：Android 9+（minSdk 28），targetSdk 34，横屏，仅 armeabi-v7a
 - 同系列还有一个 WebView 版「爱看电视」（`com.lev1s.ikanbottv`），在另一个工程里，
   两者独立安装、各自记录；原生版遇到站点挑战页打不开时，用菜单键可跨包打开它兜底。
@@ -34,12 +34,12 @@ bash build.sh   # 产物：build-manual/ikantv.apk
 `.github/workflows/build.yml`：推 `main`、开 PR、或手动 `workflow_dispatch` 都会
 在云端用同一条 `build.sh` 构建，验签与包信息后把 APK 作为 artifact 上传
 （保留 30 天）。密钥优先读仓库 Secret `SIGNING_KEYSTORE_B64`，
-其次读仓库内的 `keystore/ikanbot-tv.jks.b64`，都没有就直接报错。
+其次读仓库内的 `keystore/ikantv.jks.b64`，都没有就直接报错。
 
 ## 目录
 
 ```text
-app/src/main/java/com/lev1s/ikanbottv/
+app/src/main/java/com/lev1s/ikantv/
   ui/     原生界面：首页海报墙、分类网格、搜索、历史、焦点与海报加载
   data/   站点抓取与 HTML 解析、播放线路、海报地址、历史存储
   PlayerActivity.java  libVLC 播放器：选集/换源双面板、线路测速、坏源自动换线、续播
@@ -48,8 +48,10 @@ ci-assets/             二进制资源的 base64 文本 + SHA-256 清单
 docs/research/         可行性研究、站点探测、换源崩溃审查等历史报告
 ```
 
-注意：代码包名是 `com.lev1s.ikanbottv`（不带 `.native`）——`native` 是 Java
-关键字不能作包名，只有 applicationId 带 `.native`；`build.sh` 用
-aapt2 `--custom-package` 生成 R 类，Manifest 里 Activity 一律写全限定类名。
+命名约定：代码包名与 applicationId 已统一为 `com.lev1s.ikantv`（2.8.2 起），
+Manifest 里 Activity 用相对类名。历史背景：2.8.1 及以前代码包是
+`com.lev1s.ikanbottv`、applicationId 是 `com.lev1s.ikanbottv.native`
+（`native` 是 Java 关键字、作不了包名），2.8.2 借仓库独立化的机会一并改名；
+盒子上按新应用处理（旧包数据迁移与桌面重排见装机记录）。
 
 给 AI 协作者的工作约定见 [AGENTS.md](AGENTS.md)。

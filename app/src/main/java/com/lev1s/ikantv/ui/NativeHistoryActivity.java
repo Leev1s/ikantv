@@ -1,4 +1,4 @@
-package com.lev1s.ikanbottv.ui;
+package com.lev1s.ikantv.ui;
 
 import android.app.Activity;
 import android.os.Bundle;
@@ -8,9 +8,9 @@ import android.view.WindowManager;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
-import com.lev1s.ikanbottv.R;
-import com.lev1s.ikanbottv.data.HistoryStore;
-import com.lev1s.ikanbottv.data.VideoItem;
+import com.lev1s.ikantv.R;
+import com.lev1s.ikantv.data.HistoryStore;
+import com.lev1s.ikantv.data.VideoItem;
 
 import java.util.List;
 

@@ -1,4 +1,4 @@
-package com.lev1s.ikanbottv.ui;
+package com.lev1s.ikantv.ui;
 
 import android.content.Context;
 import android.graphics.Outline;
@@ -12,8 +12,8 @@ import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
-import com.lev1s.ikanbottv.R;
-import com.lev1s.ikanbottv.data.VideoItem;
+import com.lev1s.ikantv.R;
+import com.lev1s.ikantv.data.VideoItem;
 
 /**
  * Emby 风格海报卡：海报（2:3）+ 下方标题，海报墙与网格页共用。

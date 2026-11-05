@@ -1,4 +1,4 @@
-package com.lev1s.ikanbottv;
+package com.lev1s.ikantv;
 
 import android.content.Context;
 import android.webkit.WebResourceRequest;

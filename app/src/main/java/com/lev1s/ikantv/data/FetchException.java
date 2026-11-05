@@ -1,4 +1,4 @@
-package com.lev1s.ikanbottv.data;
+package com.lev1s.ikantv.data;
 
 /** 取数失败的明确类型，UI 层按类型决定提示与降级动作。 */
 public class FetchException extends Exception {

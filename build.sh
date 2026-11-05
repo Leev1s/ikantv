@@ -9,17 +9,16 @@
 #
 # Signing keystore resolution, first hit wins:
 #   1. $KEYSTORE_FILE (path)                    — GitHub Actions uses this (from Secrets)
-#   2. keystore/ikanbot-tv.jks (plain file)     — local use, never committed
-#   3. keystore/ikanbot-tv.jks.b64 (base64)     — decoded to build-manual/keystore.jks
+#   2. keystore/ikantv.jks (plain file)     — local use, never committed
+#   3. keystore/ikantv.jks.b64 (base64)     — decoded to build-manual/keystore.jks
 # Passwords come from $KEYSTORE_PASSWORD / $KEY_PASSWORD (defaults match the
 # long-standing local keystore so CI needs no extra secrets for them).
 set -euo pipefail
 cd "$(dirname "$0")"
 
-VERSION_CODE=2
-VERSION_NAME=2.8.1
-APP_ID=com.lev1s.ikanbottv.native
-CODE_PACKAGE=com.lev1s.ikanbottv
+VERSION_CODE=3
+VERSION_NAME=2.8.2
+APP_ID=com.lev1s.ikantv
 
 # --- toolchain ---
 if [ -n "${JAVA_HOME:-}" ]; then export PATH="$JAVA_HOME/bin:$PATH"; fi
@@ -54,18 +53,18 @@ JSOUP_JAR=build-deps/jsoup-1.18.3.jar
 # --- keystore ---
 OUT=build-manual
 rm -rf $OUT && mkdir -p $OUT/gen $OUT/classes $OUT/dex
-KS_PASS="${KEYSTORE_PASSWORD:-ikanbot-tv}"
-KEY_PASS="${KEY_PASSWORD:-ikanbot-tv}"
-KEY_ALIAS="${KEY_ALIAS:-ikanbot}"
+KS_PASS="${KEYSTORE_PASSWORD:-ikantv}"
+KEY_PASS="${KEY_PASSWORD:-ikantv}"
+KEY_ALIAS="${KEY_ALIAS:-ikantv}"
 if [ -n "${KEYSTORE_FILE:-}" ]; then
   KS="$KEYSTORE_FILE"
-elif [ -f keystore/ikanbot-tv.jks ]; then
-  KS=keystore/ikanbot-tv.jks
-elif [ -f keystore/ikanbot-tv.jks.b64 ]; then
-  base64 -d keystore/ikanbot-tv.jks.b64 > $OUT/keystore.jks
+elif [ -f keystore/ikantv.jks ]; then
+  KS=keystore/ikantv.jks
+elif [ -f keystore/ikantv.jks.b64 ]; then
+  base64 -d keystore/ikantv.jks.b64 > $OUT/keystore.jks
   KS=$OUT/keystore.jks
 else
-  echo "ERROR: no signing keystore found (KEYSTORE_FILE / keystore/ikanbot-tv.jks[.b64])" >&2; exit 1
+  echo "ERROR: no signing keystore found (KEYSTORE_FILE / keystore/ikantv.jks[.b64])" >&2; exit 1
 fi
 
 APP=app/src/main
@@ -84,7 +83,6 @@ aapt2 link -o $OUT/app-unsigned.apk \
   --manifest $OUT/AndroidManifest.xml \
   --java $OUT/gen \
   --extra-packages org.videolan \
-  --custom-package $CODE_PACKAGE \
   --version-code $VERSION_CODE --version-name $VERSION_NAME \
   --min-sdk-version 28 --target-sdk-version 34 \
   -A $APP/assets \

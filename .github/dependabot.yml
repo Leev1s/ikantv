@@ -1,0 +1,9 @@
+# Keep GitHub Actions versions current (weekly check, PRs only when
+# a newer version exists). App dependencies are NOT managed here:
+# libVLC/Jsoup are pinned by SHA-256 in tools/fetch-deps.sh on purpose.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

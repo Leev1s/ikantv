@@ -19,7 +19,7 @@
         android:usesCleartextTraffic="true">
 
         <activity
-            android:name="com.lev1s.ikanbottv.PlayerActivity"
+            android:name=".PlayerActivity"
             android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|smallestScreenSize|uiMode"
             android:exported="false"
             android:launchMode="singleTask"
@@ -28,7 +28,7 @@
         <!-- 原生版唯一桌面入口（2026-11-04 分包：本应用只有原生浏览层；
              WebView 原站模式是另一个独立应用「爱看电视」，经 NavHelper 跨包兜底） -->
         <activity
-            android:name="com.lev1s.ikanbottv.ui.NativeHomeActivity"
+            android:name=".ui.NativeHomeActivity"
             android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|smallestScreenSize|uiMode"
             android:exported="true"
             android:label="爱看电视·原生版"
@@ -42,19 +42,19 @@
         </activity>
 
         <activity
-            android:name="com.lev1s.ikanbottv.ui.NativeGridActivity"
+            android:name=".ui.NativeGridActivity"
             android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|smallestScreenSize|uiMode"
             android:exported="false"
             android:screenOrientation="landscape" />
 
         <activity
-            android:name="com.lev1s.ikanbottv.ui.NativeSearchActivity"
+            android:name=".ui.NativeSearchActivity"
             android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|smallestScreenSize|uiMode"
             android:exported="false"
             android:screenOrientation="landscape" />
 
         <activity
-            android:name="com.lev1s.ikanbottv.ui.NativeHistoryActivity"
+            android:name=".ui.NativeHistoryActivity"
             android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|smallestScreenSize|uiMode"
             android:exported="false"
             android:screenOrientation="landscape" />

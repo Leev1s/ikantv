@@ -1,4 +1,4 @@
-package com.lev1s.ikanbottv.ui;
+package com.lev1s.ikantv.ui;
 
 import android.content.Context;
 import android.graphics.Bitmap;
@@ -8,7 +8,7 @@ import android.os.Looper;
 import android.util.LruCache;
 import android.widget.ImageView;
 
-import com.lev1s.ikanbottv.data.HttpFetcher;
+import com.lev1s.ikantv.data.HttpFetcher;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
