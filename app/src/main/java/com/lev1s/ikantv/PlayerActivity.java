@@ -88,6 +88,52 @@ public class PlayerActivity extends Activity {
     private final Map<Integer, Integer> lineLatency = new HashMap<>(); // line -> ms, -1=失败
     private final Map<Integer, Boolean> lineProbeDone = new HashMap<>();
     private final Set<String> lineProbesInFlight = new HashSet<>();
+    private final Map<String, String> declaredQuality = new HashMap<>(); // 集名 + URL -> master 声明
+    private final Map<String, Long> hostCooldown = new HashMap<>();
+    private final Map<String, Integer> hostFailures = new HashMap<>();
+    private final java.util.concurrent.Semaphore probePermit = new java.util.concurrent.Semaphore(1);
+    public static final int LATENCY_FASTEST_MS = 100, LATENCY_FAST_MS = 300,
+            LATENCY_NORMAL_MS = 700, LATENCY_SLOW_MS = 1500;
+
+    public static String latencyGrade(int ms) {
+        if (ms < 0) return "未连通";
+        if (ms < LATENCY_FASTEST_MS) return "飞快";
+        if (ms < LATENCY_FAST_MS) return "快";
+        if (ms < LATENCY_NORMAL_MS) return "一般";
+        if (ms < LATENCY_SLOW_MS) return "慢";
+        return "很慢";
+    }
+
+    /** 主线程调用；每次打开面板取一次，返回的原始线路索引列表不随测速回调变化。 */
+    public List<Integer> snapshotLineOrder() {
+        List<Integer> order = new ArrayList<>();
+        for (int i = 0; i < lines.size(); i++) order.add(i);
+        final String ep = episodes.get(curEp);
+        order.sort((a, b) -> {
+            int ca = lineSortCategory(a, ep), cb = lineSortCategory(b, ep);
+            if (ca != cb) return Integer.compare(ca, cb);
+            if (ca == 0) {
+                int c = Integer.compare(lineLatency.get(a), lineLatency.get(b));
+                if (c != 0) return c;
+            }
+            return Integer.compare(a, b);
+        });
+        return order;
+    }
+
+    private int lineSortCategory(int index, String ep) {
+        if (!lines.get(index).urls.containsKey(ep)) return 3;
+        if (badSources.contains(curEp + "|" + index)) return 2;
+        Integer ms = lineLatency.get(index);
+        return ms == null ? 1 : ms < 0 ? 2 : 0;
+    }
+
+    /** 主线程调用；无 master 声明时返回 null。 */
+    public String getDeclaredQuality(int line) {
+        if (episodes.isEmpty() || line < 0 || line >= lines.size()) return null;
+        String ep = episodes.get(curEp), url = lines.get(line).urls.get(ep);
+        return declaredQuality.get(ep + "|" + url);
+    }
 
     // ---------- 播放器（libVLC 现成播放器内核：HTTPS + AES-128 HLS + MediaCodec 硬解） ----------
     private volatile LibVLC libVlc;
@@ -98,7 +144,11 @@ public class PlayerActivity extends Activity {
     private boolean userPaused = false;
     private volatile boolean foreground = false;
     private volatile boolean pendingStart = false;
-    private long pendingSeekMs = -1;
+    private volatile long pendingSeekMs = -1;
+    private int resumeRetryGeneration = -1;
+    private boolean suppressOldSave = false;
+    private static final int RESUME_SEEK_ATTEMPTS = 30;
+    private static final long RESUME_SEEK_INTERVAL_MS = 1000;
     private int speedIdx = 0;
     private static final float[] SPEEDS = {1.0f, 1.25f, 1.5f, 2.0f, 0.5f};
 
@@ -107,6 +157,9 @@ public class PlayerActivity extends Activity {
     private TextView loadingText;
     private View topBar;
     private TextView titleText, subText;
+    private TextView playerClock, videoStats, audioStats;
+    private int statsTick = 0, statsVisibilityEpoch = 0;
+    private PlaybackStatsSnapshot visibleStats;
     private View controller;
     private SeekBar seekBar;
     private TextView timeText;
@@ -117,6 +170,7 @@ public class PlayerActivity extends Activity {
     private GridView epGrid;
     private ListView lineList;
     private LineAdapter lineAdapter;
+    private List<Integer> lineDisplayOrder = new ArrayList<>();
     private boolean panelOpen = false;
     private boolean panelEpMode = true;
 
@@ -153,12 +207,18 @@ public class PlayerActivity extends Activity {
     private final Runnable hideChrome = () -> {
         topBar.setVisibility(View.GONE);
         controller.setVisibility(View.GONE);
+        playerClock.setVisibility(View.GONE);
+        visibleStats = null;
+        statsVisibilityEpoch++;
+        resetPlaybackStatsBaseline();
     };
     private final Runnable hideIndicator = () -> centerIndicator.setVisibility(View.GONE);
     private final Runnable hideOsd = () -> osdText.setVisibility(View.GONE);
     private final Runnable tick = new Runnable() {
         @Override public void run() {
             updateProgress();
+            if (++statsTick % 2 == 0 && (topBar.getVisibility() == View.VISIBLE
+                    || (panelOpen && !panelEpMode))) updatePlaybackStats();
             handler.postDelayed(this, 500);
         }
     };
@@ -180,6 +240,9 @@ public class PlayerActivity extends Activity {
         topBar = findViewById(R.id.top_bar);
         titleText = findViewById(R.id.title_text);
         subText = findViewById(R.id.sub_text);
+        playerClock = findViewById(R.id.player_clock);
+        videoStats = findViewById(R.id.video_stats);
+        audioStats = findViewById(R.id.audio_stats);
         controller = findViewById(R.id.controller);
         seekBar = findViewById(R.id.seek_bar);
         timeText = findViewById(R.id.time_text);
@@ -195,9 +258,11 @@ public class PlayerActivity extends Activity {
             if (position != curEp) switchEpisode(position, true);
         });
         lineList.setOnItemClickListener((parent, view, position, id) -> {
-            if (!lines.get(position).urls.containsKey(episodes.get(curEp))) return;
+            if (position < 0 || position >= lineDisplayOrder.size()) return;
+            int line = lineDisplayOrder.get(position);
+            if (!lines.get(line).urls.containsKey(episodes.get(curEp))) return;
             closePanel();
-            if (position != curLine) switchLine(position, true, safePos());
+            if (line != curLine) switchLine(line, true, safePos());
         });
 
         setLoading(true, "正在打开播放页，获取线路…");
@@ -484,6 +549,7 @@ public class PlayerActivity extends Activity {
             episodes.sort(PlayerActivity::compareEpisodes);
             // 恢复上次进度（同片同站）
             restoreState();
+            applyActivePlayerEntry();
             harvestDone = true;
             dataReady = true;
             if (harvestView != null) {
@@ -536,18 +602,38 @@ public class PlayerActivity extends Activity {
             curEp = mapped;
             if (ln >= 0 && ln < lines.size()
                     && lines.get(ln).urls.containsKey(episodes.get(curEp))) curLine = ln;
-            if (pos > 10000) pendingSeekMs = pos;
+            if (pos > 0) pendingSeekMs = pos;
         } catch (Exception ignored) { }
+    }
+
+    private void applyActivePlayerEntry() {
+        Intent intent = getIntent();
+        if (!intent.hasExtra("active_player_episode") || !intent.hasExtra("active_player_line")) return;
+        int episode = intent.getIntExtra("active_player_episode", -1);
+        int line = intent.getIntExtra("active_player_line", -1);
+        if (episode < 0 || episode >= episodes.size() || line < 0 || line >= lines.size()
+                || !lines.get(line).urls.containsKey(episodes.get(episode))) return;
+        if (episode != curEp) pendingSeekMs = -1;
+        curEp = episode;
+        curLine = line;
+        String title = intent.getStringExtra("active_player_title");
+        if (title != null && !title.trim().isEmpty()) videoTitle = title;
+    }
+
+    private void writeActivePlayer() {
+        if (videoId.isEmpty() || playingEp < 0 || playingLine < 0) return;
+        prefs.edit().putString("active_player", videoId + "|" + playingEp + "|" + playingLine)
+                .putString("active_player_title", videoTitle).apply();
     }
 
     // 保存与 stop/setMedia 串行：身份和位置始终来自同一媒体会话。
     private void saveState() {
-        if (!playerReleased) playerExecutor.execute(this::saveStateOnPlayerThread);
+        if (!playerReleased && pendingSeekMs <= 0) playerExecutor.execute(this::saveStateOnPlayerThread);
     }
 
     private void saveStateOnPlayerThread() {
         if (videoId.isEmpty() || vp == null || playingEp < 0 || playingGeneration < 0
-                || playingGeneration != confirmedGeneration) return;
+                || playingGeneration != confirmedGeneration || pendingSeekMs > 0) return;
         try {
             long pos = vp.getTime();
             if (pos < 0) return;
@@ -626,19 +712,28 @@ public class PlayerActivity extends Activity {
                         delayedPlayError = null;
                     }
                     confirmedGeneration = gen;
+                    prefs.edit().putInt("lastline_" + videoId, playingLine).apply();
+                    writeActivePlayer();
                     prepared = true;
                     userPaused = false;
                     setLoading(false, "");
                     applySpeed();
-                    if (pendingSeekMs > 0) {
-                        long dur = vp.getLength();
-                        if (dur <= 0 || pendingSeekMs < dur - 5000) {
-                            vp.setTime(pendingSeekMs);
-                            showOsd("已续播到 " + fmtTime(pendingSeekMs));
-                        }
-                        pendingSeekMs = -1;
+                    if (pendingSeekMs > 0 && resumeRetryGeneration != gen) {
+                        resumeRetryGeneration = gen;
+                        showOsd("正在续播到 " + fmtTime(pendingSeekMs));
+                        retryResumeSeek(gen, pendingSeekMs, RESUME_SEEK_ATTEMPTS);
                     }
+                    saveState();
                     showChrome();
+                    break;
+                }
+                case org.videolan.libvlc.MediaPlayer.Event.TimeChanged: {
+                    if (pendingSeekMs > 0 && event.getTimeChanged() > 0
+                            && Math.abs(event.getTimeChanged() - pendingSeekMs)
+                                    <= Math.min(2000, Math.max(250, pendingSeekMs / 4))) {
+                        pendingSeekMs = -1;
+                        saveState();
+                    }
                     break;
                 }
                 case org.videolan.libvlc.MediaPlayer.Event.EndReached: {
@@ -666,6 +761,22 @@ public class PlayerActivity extends Activity {
         });
     }
 
+    private void retryResumeSeek(final int gen, final long target, final int attempts) {
+        if (playerReleased || gen != playGeneration.get() || pendingSeekMs != target) return;
+        if (attempts <= 0) {
+            Log.w(TAG, "resume seek unconfirmed; preserving saved position " + target);
+            showOsd("续播位置恢复失败，已保留原进度");
+            return;
+        }
+        playerExecutor.execute(() -> {
+            if (!playerReleased && gen == playGeneration.get() && gen == playingGeneration
+                    && pendingSeekMs == target && vp != null && vp.isSeekable()) {
+                try { vp.setTime(target); } catch (Exception e) { Log.w(TAG, "resume seek", e); }
+            }
+        });
+        handler.postDelayed(() -> retryResumeSeek(gen, target, attempts - 1), RESUME_SEEK_INTERVAL_MS);
+    }
+
     private void playUrlInternal(String url) {
         if (playerReleased) return;
         if (delayedPlayError != null) {
@@ -675,6 +786,8 @@ public class PlayerActivity extends Activity {
         final int gen = playGeneration.incrementAndGet();
         final int targetEp = curEp;
         final int targetLine = curLine;
+        final boolean skipOldSave = suppressOldSave;
+        suppressOldSave = false;
         pendingStart = true;
         prepared = false;
         setLoading(true, "正在缓冲：" + episodes.get(curEp) + " · " + lines.get(curLine).label + "…");
@@ -694,7 +807,7 @@ public class PlayerActivity extends Activity {
                 // saveState 读 getTime：须在 stop 之前、与 stop 同任务。
                 // 仅在确有旧媒体在播时才存（playingEp>=0）——首次播放时存量
                 // 续播位置还没被消费，不能拿新播放器的 0 位置把它覆掉。
-                saveStateOnPlayerThread();
+                if (!skipOldSave) saveStateOnPlayerThread();
                 // 清掉旧 listener 及其排队事件；stop 同步等待旧输入线程退出。
                 player.setEventListener(null);
                 player.stop();
@@ -775,7 +888,8 @@ public class PlayerActivity extends Activity {
     private void switchEpisode(int ep, boolean keepPos) {
         // 先存旧集续播状态再改 curEp（M1）；saveState 已以 playingEp 为准，
         // 这里的先行保存是第二层保险。切集同时清零自动换线节流。
-        saveState();
+        if (pendingSeekMs > 0) suppressOldSave = true;
+        else saveState();
         lastAutoSwitchAt = 0;
         curEp = ep;
         lineLatency.clear();
@@ -801,7 +915,8 @@ public class PlayerActivity extends Activity {
         if (url == null) return;
         lastAutoSwitchAt = 0;   // 手动切线不受自动换线节流限制
         curLine = line;
-        pendingSeekMs = keepPos && pos > 0 ? pos : -1;
+        if (!keepPos) pendingSeekMs = -1;
+        else if (pendingSeekMs <= 0 && pos > 0) pendingSeekMs = pos;
         playUrlInternal(url);
     }
 
@@ -845,6 +960,85 @@ public class PlayerActivity extends Activity {
         playerExecutor.shutdown();
     }
 
+    /** 播放统计值为采样快照；缺失轨道用 null/0，缺失差分用 -1。 */
+    public static final class PlaybackStatsSnapshot {
+        public final int generation, width, height, audioChannels, audioRate;
+        public final String videoCodec, audioCodec;
+        public final double nominalFps, demuxMbps, inputMbps, displayedFps;
+        public final long sampledAtMs, intervalMs;
+        public final int displayedDelta, lostDelta;
+        private PlaybackStatsSnapshot(int generation, int width, int height, String videoCodec,
+                double nominalFps, String audioCodec, int audioChannels, int audioRate,
+                double demuxMbps, double inputMbps, long sampledAtMs, long intervalMs,
+                int displayedDelta, int lostDelta) {
+            this.generation = generation; this.width = width; this.height = height;
+            this.videoCodec = videoCodec; this.nominalFps = nominalFps;
+            this.audioCodec = audioCodec; this.audioChannels = audioChannels; this.audioRate = audioRate;
+            this.demuxMbps = demuxMbps; this.inputMbps = inputMbps; this.sampledAtMs = sampledAtMs;
+            this.intervalMs = intervalMs; this.displayedDelta = displayedDelta; this.lostDelta = lostDelta;
+            this.displayedFps = intervalMs > 0 && displayedDelta >= 0 ? displayedDelta * 1000.0 / intervalMs : -1;
+        }
+    }
+
+    // 以下基线只由 playerExecutor 访问。
+    private int statsGeneration = -1, statsDisplayed = -1, statsLost = -1;
+    private long statsTime = -1;
+
+    /** chrome 隐藏后调用；下次采样建立新基线。 */
+    public void resetPlaybackStatsBaseline() {
+        if (!playerReleased) playerExecutor.execute(() -> { statsGeneration = -1; statsTime = -1; });
+    }
+
+    /** 主线程发起；回调在主线程，切代或释放时丢弃，未就绪返回 null。 */
+    public void requestPlaybackStats(java.util.function.Consumer<PlaybackStatsSnapshot> callback) {
+        if (playerReleased || callback == null) return;
+        final int gen = playGeneration.get();
+        playerExecutor.execute(() -> {
+            PlaybackStatsSnapshot snapshot = null;
+            org.videolan.libvlc.interfaces.IMedia media = null;
+            try {
+                if (!playerReleased && gen == playGeneration.get() && gen == playingGeneration
+                        && gen == confirmedGeneration && vp != null) {
+                    media = vp.getMedia();
+                    org.videolan.libvlc.interfaces.IMedia.VideoTrack video = vp.getCurrentVideoTrack();
+                    org.videolan.libvlc.interfaces.IMedia.AudioTrack audio = null;
+                    if (media != null) {
+                        int audioId = vp.getAudioTrack();
+                        for (int i = 0; i < media.getTrackCount(); i++) {
+                            org.videolan.libvlc.interfaces.IMedia.Track t = media.getTrack(i);
+                            if (t instanceof org.videolan.libvlc.interfaces.IMedia.AudioTrack && t.id == audioId) {
+                                audio = (org.videolan.libvlc.interfaces.IMedia.AudioTrack) t;
+                                break;
+                            }
+                        }
+                        org.videolan.libvlc.interfaces.IMedia.Stats s = media.getStats();
+                        long now = SystemClock.elapsedRealtime(), interval = -1;
+                        int displayed = -1, lost = -1;
+                        if (s != null) {
+                            if (statsGeneration == gen && statsTime >= 0 && now > statsTime
+                                    && s.displayedPictures >= statsDisplayed && s.lostPictures >= statsLost) {
+                                interval = now - statsTime;
+                                displayed = s.displayedPictures - statsDisplayed;
+                                lost = s.lostPictures - statsLost;
+                            }
+                            statsGeneration = gen; statsTime = now;
+                            statsDisplayed = s.displayedPictures; statsLost = s.lostPictures;
+                        }
+                        snapshot = new PlaybackStatsSnapshot(gen, video == null ? 0 : video.width,
+                                video == null ? 0 : video.height, video == null ? null : video.codec,
+                                video == null || video.frameRateDen <= 0 ? 0 : (double) video.frameRateNum / video.frameRateDen,
+                                audio == null ? null : audio.codec, audio == null ? 0 : audio.channels,
+                                audio == null ? 0 : audio.rate, s == null ? -1 : s.demuxBitrate * 8.0,
+                                s == null ? -1 : s.inputBitrate * 8.0, now, interval, displayed, lost);
+                    }
+                }
+            } catch (Exception e) { Log.w(TAG, "playback stats", e); }
+            finally { if (media != null) media.release(); }
+            final PlaybackStatsSnapshot result = snapshot;
+            handler.post(() -> { if (!playerReleased && gen == playGeneration.get()) callback.accept(result); });
+        });
+    }
+
     // ================= 线路测速 =================
 
     private void probeAllLines() {
@@ -859,8 +1053,20 @@ public class PlayerActivity extends Activity {
             probePool.execute(() -> {
                 long t0 = SystemClock.elapsedRealtime();
                 int result = -1;
+                String quality = null;
+                boolean deferred = false;
+                HttpURLConnection c = null;
+                boolean acquired = false;
                 try {
-                    HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
+                    probePermit.acquire();
+                    acquired = true;
+                    String host = new URL(url).getHost();
+                    synchronized (hostCooldown) {
+                        deferred = SystemClock.elapsedRealtime() < hostCooldown.getOrDefault(host, 0L);
+                    }
+                    if (deferred || playerReleased) throw new java.io.IOException("probe deferred");
+                    t0 = SystemClock.elapsedRealtime();
+                    c = (HttpURLConnection) new URL(url).openConnection();
                     c.setConnectTimeout(2500);
                     c.setReadTimeout(3000);
                     c.setRequestProperty("User-Agent", DESKTOP_UA);
@@ -880,26 +1086,83 @@ public class PlayerActivity extends Activity {
                             if (firstLine.startsWith("\uFEFF")) firstLine = firstLine.substring(1);
                             if ("#EXTM3U".equals(firstLine)) {
                                 result = (int) (SystemClock.elapsedRealtime() - t0);
+                                java.io.ByteArrayOutputStream body = new java.io.ByteArrayOutputStream();
+                                byte[] buf = new byte[4096];
+                                int remaining = 65536 - n - 1, count;
+                                while (remaining > 0 && (count = in.read(buf, 0, Math.min(buf.length, remaining))) != -1) {
+                                    body.write(buf, 0, count);
+                                    remaining -= count;
+                                }
+                                if (remaining > 0) quality = parseDeclaredQuality(body.toString("UTF-8"));
                             }
                         }
                     } else {
+                        if (code == 429) {
+                            long delay = retryAfterMillis(c.getHeaderField("Retry-After"));
+                            synchronized (hostCooldown) {
+                                int failures = Math.min(4, hostFailures.getOrDefault(host, 0));
+                                hostFailures.put(host, failures + 1);
+                                delay = Math.max(delay, Math.min(600000L, 60000L << failures));
+                                hostCooldown.put(host, SystemClock.elapsedRealtime() + delay);
+                            }
+                            deferred = true;
+                        }
                         InputStream error = c.getErrorStream();
                         if (error != null) error.close();
                     }
                 } catch (Exception e) {
                     result = -1;
+                } finally {
+                    if (c != null) c.disconnect();
+                    if (acquired) probePermit.release();
                 }
                 final int r = result;
+                final String declared = quality;
+                final boolean wasDeferred = deferred;
                 handler.post(() -> {
                     if (playerReleased) return;
                     lineProbesInFlight.remove(probeKey);
+                    if (declared != null) declaredQuality.put(epName + "|" + url, declared);
+                    if (wasDeferred) return;
                     if (!episodes.get(curEp).equals(epName)
                             || badSources.contains(curEp + "|" + idx)) return;
                     lineLatency.put(idx, r);
                     lineProbeDone.put(idx, true);
-                    if (panelOpen && !panelEpMode) refreshLineList();
+                    if (panelOpen && !panelEpMode) refreshVisibleLineLabels();
                 });
             });
+        }
+    }
+
+    private static String parseDeclaredQuality(String body) {
+        String best = null;
+        long bestBandwidth = -1;
+        java.util.regex.Pattern resolution = java.util.regex.Pattern.compile("(?:^|,)RESOLUTION=(\\d+x\\d+)");
+        java.util.regex.Pattern bandwidth = java.util.regex.Pattern.compile("(?:^|,)BANDWIDTH=(\\d+)");
+        for (String line : body.split("\\r?\\n")) {
+            if (!line.startsWith("#EXT-X-STREAM-INF:")) continue;
+            String attrs = line.substring("#EXT-X-STREAM-INF:".length());
+            java.util.regex.Matcher r = resolution.matcher(attrs), b = bandwidth.matcher(attrs);
+            String size = r.find() ? r.group(1) : null;
+            long rate = -1;
+            if (b.find()) try { rate = Long.parseLong(b.group(1)); } catch (NumberFormatException ignored) { }
+            if ((size != null || rate > 0) && (best == null || rate > bestBandwidth)) {
+                bestBandwidth = rate;
+                best = "声明 " + (size == null ? "" : size) + (size != null && rate > 0 ? " · " : "")
+                        + (rate > 0 ? String.format(java.util.Locale.US, "%.2f Mbps", rate / 1000000.0) : "");
+            }
+        }
+        return best;
+    }
+
+    private static long retryAfterMillis(String header) {
+        if (header == null) return 0;
+        try { return Math.min(3600000L, Math.max(0L, Long.parseLong(header.trim())) * 1000L); }
+        catch (NumberFormatException ignored) {
+            try {
+                java.text.SimpleDateFormat f = new java.text.SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss zzz", java.util.Locale.US);
+                return Math.max(0L, Math.min(3600000L, f.parse(header).getTime() - System.currentTimeMillis()));
+            } catch (Exception e) { return 0; }
         }
     }
 
@@ -919,9 +1182,35 @@ public class PlayerActivity extends Activity {
     private void showChrome() {
         topBar.setVisibility(View.VISIBLE);
         controller.setVisibility(View.VISIBLE);
+        playerClock.setVisibility(panelOpen ? View.GONE : View.VISIBLE);
+        audioStats.setVisibility(panelOpen ? View.INVISIBLE : View.VISIBLE);
         updateProgress();
         handler.removeCallbacks(hideChrome);
         handler.postDelayed(hideChrome, 4500);
+    }
+
+    private void updatePlaybackStats() {
+        playerClock.setText(new java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
+                .format(new java.util.Date()));
+        final int epoch = statsVisibilityEpoch;
+        requestPlaybackStats(stats -> {
+            if (epoch != statsVisibilityEpoch || (topBar.getVisibility() != View.VISIBLE
+                    && !(panelOpen && !panelEpMode))) return;
+            visibleStats = stats;
+            ArrayList<String> video = new ArrayList<>(), audio = new ArrayList<>();
+            if (stats != null) {
+                if (stats.width > 0 && stats.height > 0) video.add(stats.width + "×" + stats.height);
+                if (stats.nominalFps > 0) video.add(String.format(java.util.Locale.US, "%.2f fps", stats.nominalFps));
+                if (stats.videoCodec != null && !stats.videoCodec.isEmpty()) video.add(stats.videoCodec);
+                if (stats.demuxMbps >= 0) video.add(String.format(java.util.Locale.US, "内容 %.2f Mbps", stats.demuxMbps));
+                if (stats.audioCodec != null && !stats.audioCodec.isEmpty()) audio.add(stats.audioCodec);
+                if (stats.audioChannels > 0) audio.add(stats.audioChannels + " 声道");
+                if (stats.audioRate > 0) audio.add(String.format(java.util.Locale.US, "%.1f kHz", stats.audioRate / 1000.0));
+            }
+            videoStats.setText(android.text.TextUtils.join(" · ", video));
+            audioStats.setText(android.text.TextUtils.join(" · ", audio));
+            if (panelOpen && !panelEpMode) refreshVisibleLineLabels();
+        });
     }
 
     private void showIndicator(String s) {
@@ -969,6 +1258,8 @@ public class PlayerActivity extends Activity {
         panelEpMode = epMode;
         panelOpen = true;
         panel.setVisibility(View.VISIBLE);
+        playerClock.setVisibility(View.GONE);
+        audioStats.setVisibility(View.INVISIBLE);
         if (epMode) {
             panelTitle.setText(isMovie
                     ? "选择版本  ·  菜单键切到换源"
@@ -982,8 +1273,10 @@ public class PlayerActivity extends Activity {
             panelTitle.setText("换源（共 " + lines.size() + " 条）  ·  菜单键切到选集");
             epGrid.setVisibility(View.GONE);
             lineList.setVisibility(View.VISIBLE);
+            lineDisplayOrder = snapshotLineOrder();
             refreshLineList();
-            lineList.setSelection(curLine);
+            int selected = lineDisplayOrder.indexOf(curLine);
+            if (selected >= 0) lineList.setSelection(selected);
             lineList.requestFocus();
             probeAllLines();
         }
@@ -996,6 +1289,17 @@ public class PlayerActivity extends Activity {
             lineList.setAdapter(lineAdapter);
         } else {
             lineAdapter.notifyDataSetChanged();
+        }
+    }
+
+    // 只改现有行的文字，避免异步回调触发列表重建或改变焦点位置。
+    private void refreshVisibleLineLabels() {
+        if (lineAdapter == null) return;
+        int first = lineList.getFirstVisiblePosition();
+        for (int i = 0; i < lineList.getChildCount(); i++) {
+            int position = first + i;
+            if (position < lineAdapter.getCount())
+                lineAdapter.getView(position, lineList.getChildAt(i), lineList);
         }
     }
 
@@ -1028,9 +1332,10 @@ public class PlayerActivity extends Activity {
     }
 
     private class LineAdapter extends BaseAdapter {
-        @Override public int getCount() { return lines.size(); }
-        @Override public Object getItem(int p) { return lines.get(p); }
-        @Override public long getItemId(int p) { return p; }
+        @Override public int getCount() { return lineDisplayOrder.size(); }
+        @Override public Object getItem(int p) { return lines.get(lineDisplayOrder.get(p)); }
+        @Override public long getItemId(int p) { return lineDisplayOrder.get(p); }
+        @Override public boolean hasStableIds() { return true; }
         @Override public View getView(int p, View convert, android.view.ViewGroup parent) {
             TextView tv;
             if (convert instanceof TextView) tv = (TextView) convert;
@@ -1039,19 +1344,50 @@ public class PlayerActivity extends Activity {
                 tv.setTextSize(17);
                 tv.setPadding(18, 14, 18, 14);
             }
-            LineData ld = lines.get(p);
+            int line = lineDisplayOrder.get(p);
+            LineData ld = lines.get(line);
             boolean has = ld.urls.containsKey(episodes.get(curEp));
             String status;
-            if (!has) status = "（无本集）";
-            else if (badSources.contains(curEp + "|" + p)) status = " ● 播不了";
-            else {
-                Integer lat = lineLatency.get(p);
-                if (lat == null) status = " ● 未测";
-                else if (lat < 0) status = " ● 连不上";
-                else status = " ● 可用 " + lat + "ms";
+            int dotColor = Color.GRAY;
+            if (!has) status = "无本集";
+            else if (badSources.contains(curEp + "|" + line)) {
+                status = "播不了";
+                dotColor = Color.parseColor("#D32F2F");
+            } else {
+                Integer lat = lineLatency.get(line);
+                if (lat == null) status = "待测";
+                else if (lat < 0) {
+                    status = latencyGrade(lat);
+                    dotColor = Color.parseColor("#D32F2F");
+                }
+                else {
+                    status = latencyGrade(lat) + " · " + lat + "ms";
+                    dotColor = Color.parseColor(lat < LATENCY_FASTEST_MS ? "#2E7D32"
+                            : lat < LATENCY_FAST_MS ? "#43A047"
+                            : lat < LATENCY_NORMAL_MS ? "#FBC02D"
+                            : lat < LATENCY_SLOW_MS ? "#EF6C00" : "#D32F2F");
+                }
             }
-            tv.setText(ld.label + status);
-            boolean cur = p == curLine;
+            String quality = getDeclaredQuality(line);
+            String actual = null;
+            if (line == curLine && line == playingLine && curEp == playingEp
+                    && visibleStats != null && visibleStats.generation == playGeneration.get()) {
+                ArrayList<String> parts = new ArrayList<>();
+                if (visibleStats.width > 0 && visibleStats.height > 0)
+                    parts.add(visibleStats.width + "×" + visibleStats.height);
+                if (visibleStats.demuxMbps >= 0)
+                    parts.add(String.format(java.util.Locale.US, "%.2f Mbps", visibleStats.demuxMbps));
+                if (!parts.isEmpty()) actual = "实测 " + android.text.TextUtils.join(" · ", parts);
+            }
+            String text = ld.label + "  ● " + status
+                    + (quality == null ? "" : "\n" + quality)
+                    + (actual == null ? "" : "\n" + actual);
+            android.text.SpannableString styled = new android.text.SpannableString(text);
+            int dot = text.indexOf('●');
+            styled.setSpan(new android.text.style.ForegroundColorSpan(dotColor), dot, dot + 1,
+                    android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            tv.setText(styled);
+            boolean cur = line == curLine;
             tv.setTextColor(!has ? Color.GRAY : (cur ? Color.parseColor("#FFB300") : Color.WHITE));
             tv.setBackgroundColor(cur ? Color.parseColor("#33FFB300") : Color.TRANSPARENT);
             return tv;
@@ -1167,6 +1503,7 @@ public class PlayerActivity extends Activity {
     @Override
     public void onBackPressed() {
         if (panelOpen) { closePanel(); return; }
+        prefs.edit().remove("active_player").remove("active_player_title").apply();
         saveState();
         super.onBackPressed();
     }
@@ -1175,6 +1512,7 @@ public class PlayerActivity extends Activity {
     protected void onResume() {
         super.onResume();
         foreground = true;
+        if (prepared && playingGeneration == playGeneration.get()) writeActivePlayer();
         if (pendingStart && dataReady && currentUrl() != null) playUrlInternal(currentUrl());
     }
 

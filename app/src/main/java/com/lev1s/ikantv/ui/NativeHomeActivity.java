@@ -15,6 +15,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import com.lev1s.ikantv.R;
+import com.lev1s.ikantv.PlayerActivity;
 import com.lev1s.ikantv.data.FetchException;
 import com.lev1s.ikantv.data.IkanDataSource;
 import com.lev1s.ikantv.data.IkanDataSource.Section;
@@ -29,6 +30,14 @@ import java.util.List;
  */
 public class NativeHomeActivity extends NativeBrowseActivity {
 
+    private static final String PLAYER_PREFS = "player";
+    private static final String ACTIVE_PLAYER = "active_player";
+    private static final String ACTIVE_PLAYER_TITLE = "active_player_title";
+    // 后端播放器接收集/线/标题的 intent 契约待对齐。
+    private static final String EXTRA_ACTIVE_EPISODE = "active_player_episode";
+    private static final String EXTRA_ACTIVE_LINE = "active_player_line";
+    private static final String EXTRA_ACTIVE_TITLE = "active_player_title";
+    private boolean homeInitialized;
     private LinearLayout sectionsContainer;
     private LinearLayout topEntries;
     private TextView errorText;
@@ -49,8 +58,53 @@ public class NativeHomeActivity extends NativeBrowseActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        setContentView(R.layout.activity_native_home);
+        if (!restoreActivePlayer(getIntent())) initHome();
+    }
 
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        restoreActivePlayer(intent);
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (!homeInitialized && !restoreActivePlayer(getIntent())) initHome();
+    }
+
+    private boolean restoreActivePlayer(Intent intent) {
+        if (intent == null || !Intent.ACTION_MAIN.equals(intent.getAction())
+                || !(intent.hasCategory(Intent.CATEGORY_LAUNCHER)
+                || intent.hasCategory(Intent.CATEGORY_LEANBACK_LAUNCHER)
+                || intent.hasCategory(Intent.CATEGORY_HOME))) return false;
+        android.content.SharedPreferences prefs = getSharedPreferences(PLAYER_PREFS, MODE_PRIVATE);
+        String marker = prefs.getString(ACTIVE_PLAYER, "");
+        String[] parts = marker.split("\\|", -1);
+        if (parts.length != 3) return false;
+        try {
+            long id = Long.parseLong(parts[0]);
+            int episode = Integer.parseInt(parts[1]);
+            int line = Integer.parseInt(parts[2]);
+            if (id <= 0 || episode < 0 || line < 0) return false;
+            Intent player = new Intent(this, PlayerActivity.class);
+            player.putExtra(PlayerActivity.EXTRA_URL, IkanDataSource.BASE + "/play/" + id);
+            player.putExtra(EXTRA_ACTIVE_EPISODE, episode);
+            player.putExtra(EXTRA_ACTIVE_LINE, line);
+            player.putExtra(EXTRA_ACTIVE_TITLE, prefs.getString(ACTIVE_PLAYER_TITLE, ""));
+            startActivity(player);
+            // 同一次 LAUNCHER intent 只处理一次；用户返回后正常显示首页。
+            setIntent(new Intent());
+            return true;
+        } catch (NumberFormatException e) {
+            return false;
+        }
+    }
+
+    private void initHome() {
+        homeInitialized = true;
+        setContentView(R.layout.activity_native_home);
         sectionsContainer = findViewById(R.id.sections_container);
         topEntries = findViewById(R.id.top_entries);
         errorText = findViewById(R.id.error_text);
@@ -117,8 +171,8 @@ public class NativeHomeActivity extends NativeBrowseActivity {
             for (int i = 0; i < 7; i++) {
                 View block = new View(this);
                 block.setBackgroundResource(R.drawable.skeleton_block);
-                // 与轨道卡同尺寸：宽 132；高 = 海报 122×3/2 + 内边距 10 + 标题区 6+44
-                LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(dp(132), dp(243));
+                // 与轨道卡同尺寸：海报 132×198 + 间距 6 + 标题区 48。
+                LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(dp(132), dp(252));
                 cp.leftMargin = i == 0 ? 0 : dp(12);
                 block.setLayoutParams(cp);
                 rail.addView(block);

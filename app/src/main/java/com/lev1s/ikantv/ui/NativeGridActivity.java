@@ -201,13 +201,13 @@ public class NativeGridActivity extends NativeBrowseActivity {
      * 6 秒兜底自动撤除——沿用 WebView 侧教训：请求挂死时骨架不能永久蒙屏。
      */
     private void buildSkeleton() {
-        int cardH = (cardWidthDp - 10) * 3 / 2 + 59;   // 海报 2:3 + 内边距/标题区（标题整高 47+距 2+垫 10），同 PosterCardView
+        int cardH = cardWidthDp * 3 / 2 + 54; // 海报 + 6dp 间距 + 48dp 标题区
         for (int r = 0; r < 2; r++) {
             LinearLayout row = new LinearLayout(this);
             row.setOrientation(LinearLayout.HORIZONTAL);
             LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT, dp(cardH));
-            if (r == 0) rp.bottomMargin = dp(10);
+            if (r == 0) rp.bottomMargin = dp(12);
             row.setLayoutParams(rp);
             for (int c = 0; c < COLUMNS; c++) {
                 View block = new View(this);
@@ -400,7 +400,7 @@ public class NativeGridActivity extends NativeBrowseActivity {
         LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT);
-        rp.bottomMargin = dp(10);
+        rp.bottomMargin = dp(12);
         row.setLayoutParams(rp);
         int colIndex = 0;
         for (PosterCardView card : rowBuffer) {

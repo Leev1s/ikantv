@@ -41,6 +41,12 @@
             android:textSize="16sp" />
     </LinearLayout>
 
+    <TextView
+        android:id="@+id/player_clock" android:layout_width="wrap_content"
+        android:layout_height="wrap_content" android:layout_gravity="top|right"
+        android:layout_marginTop="18dp" android:layout_marginRight="28dp"
+        android:textColor="#C9CDD2" android:textSize="16sp" android:visibility="gone" />
+
     <!-- 中央播放/暂停指示 -->
     <TextView
         android:id="@+id/center_indicator"
@@ -85,6 +91,15 @@
         android:paddingTop="10dp"
         android:paddingBottom="14dp"
         android:visibility="gone">
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:orientation="horizontal" android:layout_marginBottom="6dp">
+            <TextView android:id="@+id/video_stats" android:layout_width="0dp"
+                android:layout_height="wrap_content" android:layout_weight="1"
+                android:textColor="#C9CDD2" android:textSize="14sp" />
+            <TextView android:id="@+id/audio_stats" android:layout_width="wrap_content"
+                android:layout_height="wrap_content" android:gravity="right"
+                android:textColor="#C9CDD2" android:textSize="14sp" />
+        </LinearLayout>
         <SeekBar
             android:id="@+id/seek_bar"
             android:layout_width="match_parent"

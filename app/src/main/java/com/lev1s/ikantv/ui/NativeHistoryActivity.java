@@ -154,7 +154,7 @@ public class NativeHistoryActivity extends NativeBrowseActivity {
         LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT);
-        rp.bottomMargin = dp(10);
+        rp.bottomMargin = dp(12);
         row.setLayoutParams(rp);
         return row;
     }

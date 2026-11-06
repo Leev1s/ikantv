@@ -2,6 +2,9 @@ package com.lev1s.ikantv.ui;
 
 import android.content.Context;
 import android.graphics.Outline;
+import android.graphics.Canvas;
+import android.graphics.Paint;
+import android.animation.ValueAnimator;
 import android.text.TextUtils;
 import android.util.TypedValue;
 import android.view.Gravity;
@@ -26,6 +29,13 @@ public class PosterCardView extends LinearLayout {
     private final TextView rankBadge;
     private final TextView bigRankView;
     private final TextView titleView;
+    private final TextView subtitleView;
+    private final Paint focusPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private ValueAnimator focusAnimator;
+    private float focusAlpha;
+    private final Runnable startMarquee = this::startTitleMarquee;
+
+    private void startTitleMarquee() { titleView.setSelected(true); }
 
     /** @param widthDp 卡片总宽（dp），海报高按 2:3 推导 */
     public PosterCardView(Context context, int widthDp) {
@@ -33,13 +43,14 @@ public class PosterCardView extends LinearLayout {
         setOrientation(VERTICAL);
         setFocusable(true);
         setClickable(true);
-        setBackgroundResource(R.drawable.card_frame);
-        int pad = dp(5);
-        setPadding(pad, pad, pad, pad);
+        setWillNotDraw(false);
+        focusPaint.setColor(0xFFFFB300);
+        focusPaint.setStyle(Paint.Style.STROKE);
+        focusPaint.setStrokeWidth(dp(2));
         setClipChildren(false);
         setClipToPadding(false);
 
-        int posterW = dp(widthDp) - pad * 2;
+        int posterW = dp(widthDp);
         int posterH = posterW * 3 / 2;
 
         FrameLayout wrap = new FrameLayout(context);
@@ -80,32 +91,59 @@ public class PosterCardView extends LinearLayout {
         addView(wrap);
 
         titleView = new TextView(context);
-        titleView.setTextColor(0xFFE8EAED);
-        titleView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
-        // 顶对齐：单行/双行片名共用同一起始基线，行与行的节奏才整齐；
-        // 默认至少 47dp，随系统字体缩放扩展到两行整高；
-        // 超过两行的长名在第二行尾省略。
-        titleView.setGravity(Gravity.CENTER_HORIZONTAL | Gravity.TOP);
-        titleView.setMaxLines(2);
+        titleView.setTextColor(0xFFFFFFFF);
+        titleView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17);
+        titleView.setGravity(Gravity.CENTER);
+        titleView.setSingleLine(true);
         titleView.setEllipsize(TextUtils.TruncateAt.END);
-        titleView.setMinLines(2);
-        titleView.setMinHeight(dp(47));
         LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(
-                LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT);
-        tp.topMargin = dp(2);
+                LayoutParams.MATCH_PARENT, dp(24));
+        tp.topMargin = dp(6);
         addView(titleView, tp);
+
+        subtitleView = new TextView(context);
+        subtitleView.setTextColor(0xFFB3B3B3);
+        subtitleView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        subtitleView.setGravity(Gravity.CENTER);
+        subtitleView.setSingleLine(true);
+        subtitleView.setEllipsize(TextUtils.TruncateAt.END);
+        LinearLayout.LayoutParams sub = new LinearLayout.LayoutParams(
+                LayoutParams.MATCH_PARENT, dp(20));
+        sub.topMargin = dp(4);
+        addView(subtitleView, sub);
 
         setLayoutParams(new LayoutParams(dp(widthDp), LayoutParams.WRAP_CONTENT));
 
         setOnFocusChangeListener((v, hasFocus) -> {
-            v.animate().scaleX(hasFocus ? 1.05f : 1.0f)
-                    .scaleY(hasFocus ? 1.05f : 1.0f)
-                    .setDuration(130).start();
+            v.animate().scaleX(hasFocus ? 1.08f : 1.0f)
+                    .scaleY(hasFocus ? 1.08f : 1.0f)
+                    .setDuration(200).start();
+            removeCallbacks(startMarquee);
+            titleView.setSelected(false);
+            titleView.setEllipsize(hasFocus ? TextUtils.TruncateAt.MARQUEE : TextUtils.TruncateAt.END);
+            titleView.setMarqueeRepeatLimit(-1);
+            if (hasFocus) postDelayed(startMarquee, 800);
+            if (focusAnimator != null) focusAnimator.cancel();
+            focusAnimator = ValueAnimator.ofFloat(focusAlpha, hasFocus ? 1f : 0f);
+            focusAnimator.setDuration(200);
+            focusAnimator.addUpdateListener(a -> {
+                focusAlpha = (float) a.getAnimatedValue();
+                invalidate();
+            });
+            focusAnimator.start();
             // 放大时压住邻卡靠抬 Z 轴，绝不能用 bringToFront()：它会把卡片
             // 在父 LinearLayout 里挪到末位——真机实测曾把历史页/榜单/首页
             // 轨道的首卡「瞬移」到行尾（顺序错乱，2026-11-04 验收抓到）
             v.setTranslationZ(hasFocus ? 8f : 0f);
         });
+    }
+
+    @Override
+    protected void dispatchDraw(Canvas canvas) {
+        super.dispatchDraw(canvas);
+        focusPaint.setAlpha((int) (focusAlpha * 255));
+        float inset = dp(4);
+        canvas.drawRect(-inset, -inset, getWidth() + inset, getHeight() + inset, focusPaint);
     }
 
     public void bind(VideoItem item, PosterLoader loader) {
