@@ -38,8 +38,8 @@ Gradle 分发包缓存于 `build-cache/`，不提交二进制 wrapper；首次�
 ## 云端构建（GitHub Actions）
 
 `.github/workflows/build.yml`：推 `main`、开 PR、或手动 `workflow_dispatch` 都会
-在云端用同一条 `build.sh` 测试和构建，校验产物后上传测试报告与 APK artifact
-（保留 30 天）。密钥优先读仓库 Secret `SIGNING_KEYSTORE_B64`，
+在云端用同一条 `build.sh` 测试和构建，校验产物后上传测试报告（保留 14 天）
+与 APK artifact（保留 30 天）。密钥优先读仓库 Secret `SIGNING_KEYSTORE_B64`，
 其次读仓库内的 `keystore/ikantv.jks.b64`，都没有就直接报错。
 
 ## 目录
