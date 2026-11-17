@@ -59,7 +59,7 @@ public final class IkanDataSource {
         return checkSearchPage(IkanHtmlParser.parseSearch(html, nextPageUrl));
     }
 
-    private static GridPage checkSearchPage(GridPage page) throws FetchException {
+    static GridPage checkSearchPage(GridPage page) throws FetchException {
         if (page.items.isEmpty()) {
             if (page.searchNoResults) {
                 LOG.info("搜索页明确显示无结果");

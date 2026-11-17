@@ -27,6 +27,9 @@ import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import com.lev1s.ikantv.data.PlaybackCatalog;
+import com.lev1s.ikantv.data.PlaybackRules;
+
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -44,6 +47,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -80,8 +84,9 @@ public class PlayerActivity extends Activity {
     private String videoTitle = "";
     private boolean isMovie = false;
     private final List<String> episodes = new ArrayList<>();
-    private final List<String> legacyEpisodes = new ArrayList<>();
+    private PlaybackCatalog.Catalog episodeCatalog;
     private final List<LineData> lines = new ArrayList<>();
+    private boolean resumeStateRestored = false;
     private int curEp = 0;
     private int curLine = 0;
     private final Set<String> badSources = new HashSet<>();       // "ep|line"
@@ -139,9 +144,10 @@ public class PlayerActivity extends Activity {
     private volatile LibVLC libVlc;
     private volatile org.videolan.libvlc.MediaPlayer vp;
     private org.videolan.libvlc.util.VLCVideoLayout surface;
+    private boolean videoViewsAttached = false;
     private boolean dataReady = false;
-    private boolean prepared = false;
-    private boolean userPaused = false;
+    private volatile boolean prepared = false;
+    private volatile boolean userPaused = false;
     private volatile boolean foreground = false;
     private volatile boolean pendingStart = false;
     private volatile long pendingSeekMs = -1;
@@ -190,12 +196,26 @@ public class PlayerActivity extends Activity {
     });
     // 每次切换绑定独立 listener；stop 完成后才安装新会话 listener。
     private final AtomicInteger playGeneration = new AtomicInteger(0);
+    private final AtomicInteger playerIntentGeneration = new AtomicInteger(0);
+    private final AtomicInteger speedIntentGeneration = new AtomicInteger(0);
+    private final AtomicBoolean positionSamplePending = new AtomicBoolean(false);
     private volatile boolean playerReleased = false;
     private volatile int playingGeneration = -1;
     private volatile int confirmedGeneration = -1;
     private Runnable delayedPlayError;
-    private int lastPositionGeneration = -1;
-    private long lastPositionMs = -1;
+    /** Position and duration are one immutable, generation-scoped sample. */
+    private static final class PositionSnapshot {
+        final int generation;
+        final long positionMs;
+        final long durationMs;
+        PositionSnapshot(int generation, long positionMs, long durationMs) {
+            this.generation = generation;
+            this.positionMs = positionMs;
+            this.durationMs = durationMs;
+        }
+    }
+    private final Object positionSnapshotLock = new Object();
+    private volatile PositionSnapshot positionSnapshot = new PositionSnapshot(-1, -1, -1);
     // 播放器里实际在播的集/线（setMedia 时更新）：saveState 以它为准，
     // 切集先改 curEp 也不会把旧集位置写到新集名下（M1）。
     private volatile int playingEp = -1;
@@ -216,6 +236,7 @@ public class PlayerActivity extends Activity {
     private final Runnable hideOsd = () -> osdText.setVisibility(View.GONE);
     private final Runnable tick = new Runnable() {
         @Override public void run() {
+            requestPositionSample();
             updateProgress();
             if (++statsTick % 2 == 0 && (topBar.getVisibility() == View.VISIBLE
                     || (panelOpen && !panelEpMode))) updatePlaybackStats();
@@ -301,18 +322,8 @@ public class PlayerActivity extends Activity {
         String mt = findField(html, "mtype");
         if (cid == null || et == null) return null;
         if (mt == null) mt = "1";
-        // token：ID 末 4 位逐位 d → 在 e_token 上跳过 (d%3+1) 个字符再取 8 个，4 段拼接
-        String last4 = cid.substring(Math.max(0, cid.length() - 4));
-        StringBuilder tk = new StringBuilder();
-        int pos = 0;
-        for (int i = 0; i < last4.length(); i++) {
-            char ch = last4.charAt(i);
-            if (!Character.isDigit(ch)) return null;
-            pos += (ch - '0') % 3 + 1;
-            if (pos + 8 > et.length()) return null;
-            tk.append(et, pos, pos + 8);
-            pos += 8;
-        }
+        String tk = PlaybackRules.computeToken(cid, et);
+        if (tk == null) return null;
         String api = "https://www.ikanbot.com/api/getResN?videoId=" + cid
                 + "&mtype=" + mt + "&token=" + tk;
         String body = httpGet(api, playUrl);
@@ -332,15 +343,9 @@ public class PlayerActivity extends Activity {
                 JSONArray res = new JSONArray(item.optString("resData", "[]"));
                 for (int k = 0; k < res.length(); k++) {
                     String u = res.getJSONObject(k).optString("url", "");
-                    for (String part : u.split("#")) {
-                        int d = part.indexOf('$');
-                        if (d <= 0) continue;
-                        String name = part.substring(0, d).replaceAll("\\s+", " ").trim();
-                        String url = part.substring(d + 1).trim();
-                        if (!name.isEmpty() && url.matches("(?i).*\\.m3u8(\\?.*)?$")) {
-                            urls.put(name, url);
-                            hasPlayableUrl = true;
-                        }
+                    for (Map.Entry<String, String> entry : PlaybackRules.parseResourceUrls(u).entrySet()) {
+                        urls.put(entry.getKey(), entry.getValue());
+                        hasPlayableUrl = true;
                     }
                 }
             } catch (Exception ignored) { }
@@ -513,40 +518,46 @@ public class PlayerActivity extends Activity {
             videoId = o.optString("videoId", "");
             isMovie = "1".equals(o.optString("mtype", "1"));
             JSONArray arr = o.optJSONArray("lines");
-            lines.clear();
+            List<Map<String, String>> rawLineUrls = new ArrayList<>();
+            List<String> rawLineLabels = new ArrayList<>();
             if (arr != null) {
                 for (int i = 0; i < arr.length(); i++) {
-                    JSONObject lo = arr.getJSONObject(i);
-                    LineData ld = new LineData();
-                    ld.label = "线路" + (i + 1);
-                    JSONObject urls = lo.optJSONObject("urls");
+                    JSONObject urls = arr.getJSONObject(i).optJSONObject("urls");
+                    Map<String, String> raw = new HashMap<>();
                     if (urls != null) {
                         java.util.Iterator<String> it = urls.keys();
                         while (it.hasNext()) {
-                            String k = it.next();
-                            ld.urls.put(k, urls.optString(k));
+                            String name = it.next();
+                            String url = urls.optString(name, "");
+                            if (!name.trim().isEmpty()
+                                    && url.matches("(?i).*\\.m3u8(\\?.*)?$")) raw.put(name, url);
                         }
                     }
-                    if (!ld.urls.isEmpty()) lines.add(ld);
+                    if (!raw.isEmpty()) {
+                        rawLineUrls.add(raw);
+                        rawLineLabels.add("线路" + (i + 1));
+                    }
                 }
+            }
+            if (rawLineUrls.isEmpty()) {
+                lines.clear();
+                setLoading(true, "这部片子暂时没有可用线路，请返回换一部");
+                return;
+            }
+            episodeCatalog = PlaybackCatalog.fromLines(rawLineUrls, isMovie);
+            lines.clear();
+            episodes.clear();
+            episodes.addAll(episodeCatalog.episodes);
+            for (int i = 0; i < episodeCatalog.lineUrls.size(); i++) {
+                LineData line = new LineData();
+                line.label = rawLineLabels.get(i);
+                line.urls.putAll(episodeCatalog.lineUrls.get(i));
+                if (!line.urls.isEmpty()) lines.add(line);
             }
             if (lines.isEmpty()) {
                 setLoading(true, "这部片子暂时没有可用线路，请返回换一部");
                 return;
             }
-            // 合并所有线路的集名，同时保留旧版最丰富线路排序以迁移旧索引。
-            LineData richest = lines.get(0);
-            Set<String> allEpisodes = new HashSet<>();
-            for (LineData ld : lines) {
-                allEpisodes.addAll(ld.urls.keySet());
-                if (ld.urls.size() > richest.urls.size()) richest = ld;
-            }
-            legacyEpisodes.clear();
-            legacyEpisodes.addAll(richest.urls.keySet());
-            legacyEpisodes.sort(PlayerActivity::compareEpisodes);
-            episodes.clear();
-            episodes.addAll(allEpisodes);
-            episodes.sort(PlayerActivity::compareEpisodes);
             // 恢复上次进度（同片同站）
             restoreState();
             applyActivePlayerEntry();
@@ -567,24 +578,8 @@ public class PlayerActivity extends Activity {
         }
     }
 
-    private static int compareEpisodes(String a, String b) {
-        int na = epNum(a), nb = epNum(b);
-        if (na != nb) return Integer.compare(na, nb);
-        boolean za = a.contains("正片"), zb = b.contains("正片");
-        if (za != zb) return za ? -1 : 1;
-        return a.compareTo(b);
-    }
-
-    /** 集名里的第一个数字（第12集 → 12）；没有数字返回 MAX（排最后） */
-    private static int epNum(String s) {
-        java.util.regex.Matcher m = java.util.regex.Pattern.compile("\\d+").matcher(s);
-        if (m.find()) {
-            try { return Integer.parseInt(m.group()); } catch (Exception ignored) { }
-        }
-        return Integer.MAX_VALUE;
-    }
-
     private void restoreState() {
+        resumeStateRestored = false;
         if (videoId.isEmpty()) return;
         String saved = prefs.getString("resume_" + videoId, null);
         if (saved == null) return;
@@ -593,13 +588,12 @@ public class PlayerActivity extends Activity {
             int ep = Integer.parseInt(p[0]);
             int ln = Integer.parseInt(p[1]);
             long pos = Long.parseLong(p[2]);
-            String name = p.length >= 4
-                    ? new String(java.util.Base64.getUrlDecoder().decode(p[3]),
-                            java.nio.charset.StandardCharsets.UTF_8)
-                    : ep >= 0 && ep < legacyEpisodes.size() ? legacyEpisodes.get(ep) : null;
+            String name = episodeCatalog == null ? null
+                    : episodeCatalog.resolveSavedEpisode(p.length >= 4 ? p[3] : null, ep);
             int mapped = name == null ? -1 : episodes.indexOf(name);
             if (mapped < 0) return;
             curEp = mapped;
+            resumeStateRestored = true;
             if (ln >= 0 && ln < lines.size()
                     && lines.get(ln).urls.containsKey(episodes.get(curEp))) curLine = ln;
             if (pos > 0) pendingSeekMs = pos;
@@ -611,6 +605,20 @@ public class PlayerActivity extends Activity {
         if (!intent.hasExtra("active_player_episode") || !intent.hasExtra("active_player_line")) return;
         int episode = intent.getIntExtra("active_player_episode", -1);
         int line = intent.getIntExtra("active_player_line", -1);
+        int activeFormat = prefs.getInt("active_player_format", 0);
+        if (activeFormat >= 1) {
+            String savedName = episodeCatalog == null ? null
+                    : episodeCatalog.canonicalEpisode(prefs.getString("active_player_episode_name", null));
+            int mapped = savedName == null ? -1 : episodes.indexOf(savedName);
+            if (mapped >= 0) episode = mapped;
+        } else {
+            // The old marker index came from the larger, unnormalized episode union.
+            // A name-and-position resume record is stronger when it was recoverable.
+            if (resumeStateRestored) return;
+            String oldName = episodeCatalog == null ? null
+                    : episodeCatalog.resolveLegacyActiveEpisode(episode);
+            episode = oldName == null ? -1 : episodes.indexOf(oldName);
+        }
         if (episode < 0 || episode >= episodes.size() || line < 0 || line >= lines.size()
                 || !lines.get(line).urls.containsKey(episodes.get(episode))) return;
         if (episode != curEp) pendingSeekMs = -1;
@@ -623,7 +631,9 @@ public class PlayerActivity extends Activity {
     private void writeActivePlayer() {
         if (videoId.isEmpty() || playingEp < 0 || playingLine < 0) return;
         prefs.edit().putString("active_player", videoId + "|" + playingEp + "|" + playingLine)
-                .putString("active_player_title", videoTitle).apply();
+                .putString("active_player_title", videoTitle)
+                .putString("active_player_episode_name", episodes.get(playingEp))
+                .putInt("active_player_format", 1).apply();
     }
 
     // 保存与 stop/setMedia 串行：身份和位置始终来自同一媒体会话。
@@ -677,15 +687,46 @@ public class PlayerActivity extends Activity {
         }
         if (vp == null) {
             vp = new org.videolan.libvlc.MediaPlayer(libVlc);
-            // 必须走带 VLCVideoLayout 的 attachViews：它会创建 VideoHelper 接管
-            // 画面几何（按 DAR 等比摆放）；裸 SurfaceView 无参 attach 没有这层，
-            // 画面会被底层填充口径裁掉边缘（2026-11-03 缩放研究实锤）。
+        }
+        attachVideoViews();
+    }
+
+    /** View plumbing is kept on the main thread and tied to the Activity window lifetime. */
+    private void attachVideoViews() {
+        if (playerReleased || !foreground || vp == null || surface == null || videoViewsAttached) return;
+        try {
+            // Clear a stale helper if Android destroyed the Surface before onPause ran.
+            // MediaPlayer.detachViews() is safe when no helper is attached.
+            vp.detachViews();
+            // VLCVideoLayout installs VideoHelper to keep the video's DAR and surface geometry.
             vp.attachViews(surface, null, false, false);
             vp.setVideoScale(org.videolan.libvlc.MediaPlayer.ScaleType.SURFACE_BEST_FIT);
+            videoViewsAttached = true;
+            Log.i(TAG, "video surface attached");
+        } catch (RuntimeException e) {
+            videoViewsAttached = false;
+            try { vp.detachViews(); }
+            catch (RuntimeException cleanupError) {
+                Log.e(TAG, "video surface attach cleanup failed", cleanupError);
+            }
+            Log.e(TAG, "video surface attach failed", e);
         }
     }
 
-    private org.videolan.libvlc.MediaPlayer.EventListener listenerForSession(final int gen) {
+    /** Detach before the Activity window can destroy its SurfaceView. */
+    private void detachVideoViews(String reason) {
+        if (vp == null || !videoViewsAttached) return;
+        videoViewsAttached = false;
+        try {
+            vp.detachViews();
+            Log.i(TAG, "video surface detached: " + reason);
+        } catch (RuntimeException e) {
+            Log.e(TAG, "video surface detach failed: " + reason, e);
+        }
+    }
+
+    private org.videolan.libvlc.MediaPlayer.EventListener listenerForSession(
+            final int gen, final int sessionEp, final int sessionLine) {
         return event -> handler.post(() -> {
             if (vp == null || playerReleased) return;
             if (gen != playGeneration.get()) return;
@@ -704,7 +745,8 @@ public class PlayerActivity extends Activity {
                     if (!foreground) {
                         // 已在途的 play 与 onPause 交错时，暂停命令仍在播放器线程串行执行。
                         playerExecutor.execute(() -> {
-                            if (!foreground && !playerReleased && gen == playingGeneration) vp.pause();
+                            if (!foreground && !playerReleased && gen == playGeneration.get()
+                                    && gen == playingGeneration && vp != null) vp.pause();
                         });
                     }
                     if (delayedPlayError != null) {
@@ -715,9 +757,8 @@ public class PlayerActivity extends Activity {
                     prefs.edit().putInt("lastline_" + videoId, playingLine).apply();
                     writeActivePlayer();
                     prepared = true;
-                    userPaused = false;
                     setLoading(false, "");
-                    applySpeed();
+                    applySpeed(gen);
                     if (pendingSeekMs > 0 && resumeRetryGeneration != gen) {
                         resumeRetryGeneration = gen;
                         showOsd("正在续播到 " + fmtTime(pendingSeekMs));
@@ -728,6 +769,8 @@ public class PlayerActivity extends Activity {
                     break;
                 }
                 case org.videolan.libvlc.MediaPlayer.Event.TimeChanged: {
+                    long time = event.getTimeChanged();
+                    if (time >= 0) updatePositionSnapshot(gen, time, -1);
                     if (pendingSeekMs > 0 && event.getTimeChanged() > 0
                             && Math.abs(event.getTimeChanged() - pendingSeekMs)
                                     <= Math.min(2000, Math.max(250, pendingSeekMs / 4))) {
@@ -737,12 +780,32 @@ public class PlayerActivity extends Activity {
                     break;
                 }
                 case org.videolan.libvlc.MediaPlayer.Event.EndReached: {
-                    if (curEp + 1 < episodes.size()) {
+                    if (sessionEp != curEp || sessionLine != curLine
+                            || sessionEp != playingEp || sessionLine != playingLine
+                            || gen != playingGeneration) break;
+                    PositionSnapshot snapshot = positionSnapshot;
+                    long position = snapshot.generation == gen ? snapshot.positionMs : -1;
+                    long duration = snapshot.generation == gen ? snapshot.durationMs : -1;
+                    boolean confirmed = gen == confirmedGeneration;
+                    boolean reachedEnd = PlaybackRules.isAtMediaEnd(position, duration);
+                    Log.i(TAG, "EndReached gen=" + gen + " ep=" + sessionEp + " line="
+                            + sessionLine + " isMovie=" + isMovie + " confirmed=" + confirmed
+                            + " positionMs=" + position + " durationMs=" + duration);
+                    if (!confirmed || !reachedEnd) {
+                        onPlayError(confirmed ? "线路提前结束" : "线路未正常开始就结束");
+                        break;
+                    }
+                    if (isMovie) {
+                        showOsd("播放完毕");
+                        showChrome();
+                    } else if (sessionEp + 1 < episodes.size()) {
                         showOsd("本集播完，自动播放下一集");
                         // 延迟期内若已切集/切线（代际已变），过期动作作废
                         handler.postDelayed(() -> {
-                            if (gen != playGeneration.get() || playerReleased) return;
-                            switchEpisode(curEp + 1, false);
+                            if (gen != playGeneration.get() || playerReleased
+                                    || sessionEp != curEp || sessionLine != curLine
+                                    || gen != playingGeneration || gen != confirmedGeneration) return;
+                            switchEpisode(sessionEp + 1, false);
                         }, 1200);
                     } else {
                         showOsd("全部播完");
@@ -762,15 +825,15 @@ public class PlayerActivity extends Activity {
     }
 
     private void retryResumeSeek(final int gen, final long target, final int attempts) {
-        if (playerReleased || gen != playGeneration.get() || pendingSeekMs != target) return;
+        if (playerReleased || !foreground || gen != playGeneration.get() || pendingSeekMs != target) return;
         if (attempts <= 0) {
             Log.w(TAG, "resume seek unconfirmed; preserving saved position " + target);
             showOsd("续播位置恢复失败，已保留原进度");
             return;
         }
         playerExecutor.execute(() -> {
-            if (!playerReleased && gen == playGeneration.get() && gen == playingGeneration
-                    && pendingSeekMs == target && vp != null && vp.isSeekable()) {
+            if (isCurrentPlayerSession(gen) && foreground && pendingSeekMs == target
+                    && vp.isSeekable()) {
                 try { vp.setTime(target); } catch (Exception e) { Log.w(TAG, "resume seek", e); }
             }
         });
@@ -784,12 +847,17 @@ public class PlayerActivity extends Activity {
             delayedPlayError = null;
         }
         final int gen = playGeneration.incrementAndGet();
+        final int intent = playerIntentGeneration.incrementAndGet();
         final int targetEp = curEp;
         final int targetLine = curLine;
         final boolean skipOldSave = suppressOldSave;
         suppressOldSave = false;
+        Log.i(TAG, "play requested gen=" + gen + " ep=" + targetEp + " line=" + targetLine
+                + " isMovie=" + isMovie);
         pendingStart = true;
         prepared = false;
+        userPaused = false;
+        resetPositionSnapshot(gen);
         setLoading(true, "正在缓冲：" + episodes.get(curEp) + " · " + lines.get(curLine).label + "…");
         updateSubText();
         if (!foreground) return;
@@ -802,7 +870,8 @@ public class PlayerActivity extends Activity {
         playerExecutor.execute(() -> {
             // 已有更新一代在排队时本任务直接作废：不 stop、不换 Media，
             // 后一代任务完成真正的切换（串行队列保证最终态是最新一代）。
-            if (gen != playGeneration.get() || playerReleased || !foreground) return;
+            if (gen != playGeneration.get() || intent != playerIntentGeneration.get()
+                    || playerReleased || !foreground) return;
             try {
                 // saveState 读 getTime：须在 stop 之前、与 stop 同任务。
                 // 仅在确有旧媒体在播时才存（playingEp>=0）——首次播放时存量
@@ -812,7 +881,8 @@ public class PlayerActivity extends Activity {
                 player.setEventListener(null);
                 player.stop();
                 playingGeneration = -1;
-                if (gen != playGeneration.get() || playerReleased || !foreground) return;
+                if (gen != playGeneration.get() || intent != playerIntentGeneration.get()
+                        || playerReleased || !foreground) return;
                 Media media = new Media(lc, android.net.Uri.parse(url));
                 // 硬解优先：MediaCodec（NDK→JNI），不行自动回退软解
                 media.addOption(":codec=mediacodec_ndk,mediacodec_jni,any");
@@ -822,8 +892,9 @@ public class PlayerActivity extends Activity {
                 playingEp = targetEp;
                 playingLine = targetLine;
                 playingGeneration = gen;
-                player.setEventListener(listenerForSession(gen));
-                if (gen != playGeneration.get() || playerReleased || !foreground) return;
+                player.setEventListener(listenerForSession(gen, targetEp, targetLine));
+                if (gen != playGeneration.get() || intent != playerIntentGeneration.get()
+                        || playerReleased || !foreground) return;
                 pendingStart = false;
                 player.play();
             } catch (Exception e) {
@@ -838,6 +909,8 @@ public class PlayerActivity extends Activity {
     }
 
     private void onPlayError(String reason) {
+        Log.w(TAG, "playback failed gen=" + playGeneration.get() + " ep=" + curEp + " line="
+                + curLine + " isMovie=" + isMovie + " reason=" + reason);
         // 自动换线节流（H2 / AGENTS 口径 1.5s）：窗口内不重复自动换线，
         // 防迟到事件或连环错误短时间内把线路表扫穿；手动切换清零、不受限。
         long now = SystemClock.uptimeMillis();
@@ -862,7 +935,6 @@ public class PlayerActivity extends Activity {
             Toast.makeText(this, lines.get(curLine).label + "播不了（" + reason + "），自动切换到"
                     + lines.get(next).label, Toast.LENGTH_LONG).show();
             long pos = safePos();
-            if (pos <= 0 && lastPositionGeneration == playGeneration.get()) pos = lastPositionMs;
             // 刚换上的线路尚未续播成功时保留上一条线路的位置。
             if (pendingSeekMs <= 0 && pos > 0) pendingSeekMs = pos;
             curLine = next;
@@ -921,15 +993,50 @@ public class PlayerActivity extends Activity {
     }
 
     private long safePos() {
-        try { return vp != null ? Math.max(0, vp.getTime()) : 0; }
-        catch (Exception e) { return 0; }
+        PositionSnapshot snapshot = positionSnapshot;
+        return snapshot.generation == playGeneration.get() && snapshot.positionMs > 0
+                ? snapshot.positionMs : 0;
     }
 
-    private void applySpeed() {
-        if (vp != null) {
-            try { vp.setRate(SPEEDS[speedIdx]); }
-            catch (Exception ignored) { }
+    private void resetPositionSnapshot(int gen) {
+        synchronized (positionSnapshotLock) {
+            if (gen == playGeneration.get()) {
+                PositionSnapshot current = positionSnapshot;
+                if (current.generation <= gen) {
+                    positionSnapshot = new PositionSnapshot(gen, -1, -1);
+                }
+            }
         }
+    }
+
+    private void updatePositionSnapshot(int gen, long positionMs, long durationMs) {
+        synchronized (positionSnapshotLock) {
+            if (gen != playGeneration.get()) return;
+            PositionSnapshot current = positionSnapshot;
+            if (current.generation > gen) return;
+            boolean sameGeneration = current.generation == gen;
+            long position = positionMs >= 0 ? positionMs
+                    : sameGeneration ? current.positionMs : -1;
+            long duration = durationMs > 0 ? durationMs
+                    : sameGeneration ? current.durationMs : -1;
+            positionSnapshot = new PositionSnapshot(gen, position, duration);
+        }
+    }
+
+    private void applySpeed(final int gen) {
+        final int speedIntent = speedIntentGeneration.get();
+        final float rate = SPEEDS[speedIdx];
+        playerExecutor.execute(() -> {
+            if (speedIntent != speedIntentGeneration.get() || !isCurrentPlayerSession(gen)
+                    || !foreground || vp == null) return;
+            try { vp.setRate(rate); }
+            catch (Exception e) { Log.w(TAG, "set playback rate", e); }
+        });
+    }
+
+    private boolean isCurrentPlayerSession(int gen) {
+        return !playerReleased && gen == playGeneration.get() && gen == playingGeneration
+                && gen == confirmedGeneration && vp != null;
     }
 
     /**
@@ -941,14 +1048,18 @@ public class PlayerActivity extends Activity {
      */
     private void releasePlayer() {
         playerReleased = true;
+        detachVideoViews("destroy");
         final org.videolan.libvlc.MediaPlayer player = vp;
         final LibVLC lc = libVlc;
         playerExecutor.execute(() -> {
             if (player != null) {
                 saveStateOnPlayerThread();
                 try { player.setEventListener(null); } catch (Exception ignored) { }
-                try { player.stop(); } catch (Exception ignored) { }
-                try { player.detachViews(); } catch (Exception ignored) { }
+                try {
+                    Log.i(TAG, "player release stop started");
+                    player.stop();
+                    Log.i(TAG, "player release stop completed");
+                } catch (Exception e) { Log.w(TAG, "player release stop failed", e); }
                 try { player.release(); } catch (Exception ignored) { }
             }
             vp = null;
@@ -1228,20 +1339,36 @@ public class PlayerActivity extends Activity {
     }
 
     private void updateProgress() {
-        if (vp == null || !prepared) return;
-        try {
-            long pos = vp.getTime();
-            if (pos >= 0 && playingGeneration == playGeneration.get()) {
-                lastPositionGeneration = playingGeneration;
-                lastPositionMs = pos;
+        if (!prepared) return;
+        int gen = playGeneration.get();
+        PositionSnapshot snapshot = positionSnapshot;
+        if (snapshot.generation != gen || snapshot.positionMs < 0) return;
+        long pos = snapshot.positionMs;
+        long dur = snapshot.durationMs;
+        if (dur > 0) {
+            seekBar.setMax((int) Math.min(Integer.MAX_VALUE, dur));
+            seekBar.setProgress((int) Math.min(Integer.MAX_VALUE, pos));
+            timeText.setText(fmtTime(pos) + " / " + fmtTime(dur));
+        }
+    }
+
+    /** Samples VLC position off the main thread; only one sample can queue at a time. */
+    private void requestPositionSample() {
+        if (playerReleased || !prepared || !positionSamplePending.compareAndSet(false, true)) return;
+        final int gen = playGeneration.get();
+        playerExecutor.execute(() -> {
+            try {
+                if (!isCurrentPlayerSession(gen) || vp == null) return;
+                long position = vp.getTime();
+                long duration = vp.getLength();
+                if (!isCurrentPlayerSession(gen)) return;
+                updatePositionSnapshot(gen, position, duration);
+            } catch (Exception e) {
+                Log.w(TAG, "position sample", e);
+            } finally {
+                positionSamplePending.set(false);
             }
-            long dur = vp.getLength();
-            if (dur > 0) {
-                seekBar.setMax((int) dur);
-                seekBar.setProgress((int) pos);
-                timeText.setText(fmtTime(pos) + " / " + fmtTime(dur));
-            }
-        } catch (Exception ignored) { }
+        });
     }
 
     private static String fmtTime(long ms) {
@@ -1433,8 +1560,7 @@ public class PlayerActivity extends Activity {
                             && (event.isLongPress() || event.getRepeatCount() >= 8)) {
                         okLongHandled = true;
                         speedIdx = (speedIdx + 1) % SPEEDS.length;
-                        applySpeed();
-                        if (vp != null && !vp.isPlaying() && prepared && foreground) { vp.play(); }
+                        startWithNewSpeed();
                         showOsd("倍速 " + SPEEDS[speedIdx] + "x");
                     }
                     return true;
@@ -1474,36 +1600,81 @@ public class PlayerActivity extends Activity {
     }
 
     private void togglePlay() {
-        if (vp == null || !prepared) return;
-        if (vp.isPlaying()) {
-            vp.pause();
-            userPaused = true;
-            showIndicator("❚❚");
-            saveState();
-        } else {
-            vp.play();
-            userPaused = false;
-            showIndicator("▶");
-        }
+        if (!prepared || playerReleased || !foreground) return;
+        final int gen = playGeneration.get();
+        final boolean shouldPlay = userPaused;
+        userPaused = !shouldPlay;
+        final int intent = playerIntentGeneration.incrementAndGet();
+        playerExecutor.execute(() -> {
+            if (intent != playerIntentGeneration.get() || !isCurrentPlayerSession(gen)
+                    || !foreground || vp == null) return;
+            try {
+                if (shouldPlay && !userPaused) {
+                    vp.play();
+                } else if (!shouldPlay && userPaused) {
+                    vp.pause();
+                    saveStateOnPlayerThread();
+                }
+            } catch (Exception e) { Log.w(TAG, "toggle playback", e); }
+        });
+        showIndicator(shouldPlay ? "▶" : "❚❚");
         showChrome();
     }
 
     private void doSeek(int dir, int repeat) {
-        if (vp == null || !prepared) return;
-        int step = 30000 + Math.min(repeat, 10) * 15000;
-        long target = vp.getTime() + dir * (long) step;
-        if (target < 0) target = 0;
-        long dur = vp.getLength();
-        if (dur > 0 && target > dur - 1000) target = Math.max(0, dur - 1000);
-        vp.setTime(target);
-        showOsd((dir < 0 ? "快退 " : "快进 ") + (step / 1000) + " 秒 → " + fmtTime(target));
-        showChrome();
+        if (!prepared || playerReleased || !foreground) return;
+        // A manual seek supersedes a saved resume target; its queued retries must not undo it.
+        pendingSeekMs = -1;
+        resumeRetryGeneration = -1;
+        final int gen = playGeneration.get();
+        final int step = 30000 + Math.min(repeat, 10) * 15000;
+        playerExecutor.execute(() -> {
+            if (!isCurrentPlayerSession(gen) || !foreground || vp == null) return;
+            try {
+                long position = vp.getTime();
+                if (!isCurrentPlayerSession(gen) || !foreground) return;
+                long target = Math.max(0, position) + dir * (long) step;
+                long duration = vp.getLength();
+                if (!isCurrentPlayerSession(gen) || !foreground) return;
+                if (target < 0) target = 0;
+                if (duration > 0 && target > duration - 1000) target = Math.max(0, duration - 1000);
+                vp.setTime(target);
+                if (!isCurrentPlayerSession(gen) || !foreground) return;
+                updatePositionSnapshot(gen, target, duration);
+                final long seekTarget = target;
+                handler.post(() -> {
+                    if (gen != playGeneration.get() || playerReleased) return;
+                    showOsd((dir < 0 ? "快退 " : "快进 ") + (step / 1000)
+                            + " 秒 → " + fmtTime(seekTarget));
+                    showChrome();
+                });
+            } catch (Exception e) { Log.w(TAG, "seek", e); }
+        });
+    }
+
+    private void startWithNewSpeed() {
+        final int gen = playGeneration.get();
+        final int intent = playerIntentGeneration.incrementAndGet();
+        final int speedIntent = speedIntentGeneration.incrementAndGet();
+        final float rate = SPEEDS[speedIdx];
+        userPaused = false;
+        playerExecutor.execute(() -> {
+            if (speedIntent != speedIntentGeneration.get() || !isCurrentPlayerSession(gen)
+                    || !foreground || vp == null) return;
+            try {
+                vp.setRate(rate);
+                if (intent == playerIntentGeneration.get() && !userPaused && !vp.isPlaying()) {
+                    vp.play();
+                }
+            } catch (Exception e) { Log.w(TAG, "long-press playback", e); }
+        });
     }
 
     @Override
     public void onBackPressed() {
         if (panelOpen) { closePanel(); return; }
-        prefs.edit().remove("active_player").remove("active_player_title").apply();
+        prefs.edit().remove("active_player").remove("active_player_title")
+                .remove("active_player_episode_name").remove("active_player_format").apply();
         saveState();
         super.onBackPressed();
     }
@@ -1512,20 +1683,45 @@ public class PlayerActivity extends Activity {
     protected void onResume() {
         super.onResume();
         foreground = true;
+        attachVideoViews();
         if (prepared && playingGeneration == playGeneration.get()) writeActivePlayer();
         if (pendingStart && dataReady && currentUrl() != null) playUrlInternal(currentUrl());
+        else if (prepared) {
+            final int gen = playGeneration.get();
+            if (pendingSeekMs > 0) {
+                resumeRetryGeneration = -1;
+                retryResumeSeek(gen, pendingSeekMs, RESUME_SEEK_ATTEMPTS);
+            }
+            if (userPaused) {
+                final int intent = playerIntentGeneration.incrementAndGet();
+                playerExecutor.execute(() -> {
+                    if (intent == playerIntentGeneration.get() && isCurrentPlayerSession(gen)
+                            && foreground && userPaused && vp != null) {
+                        try { vp.pause(); }
+                        catch (Exception e) { Log.w(TAG, "foreground pause restore", e); }
+                    }
+                });
+            }
+        }
     }
 
     @Override
     protected void onPause() {
         foreground = false;
         okTracking = false;
+        userPaused = true;
+        final int intent = playerIntentGeneration.incrementAndGet();
+        final int gen = playGeneration.get();
+        detachVideoViews("pause");
         super.onPause();
         saveState();
         playerExecutor.execute(() -> {
-            if (!foreground && !playerReleased && vp != null && vp.isPlaying()) vp.pause();
+            if (intent == playerIntentGeneration.get() && !foreground && !playerReleased
+                    && gen == playGeneration.get() && vp != null) {
+                try { vp.pause(); }
+                catch (Exception e) { Log.w(TAG, "background pause", e); }
+            }
         });
-        userPaused = true;
     }
 
     @Override
