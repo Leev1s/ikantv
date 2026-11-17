@@ -12,20 +12,24 @@ are not obvious from the code.
 
 ## Build, Test, and Development Commands
 
-There is **no Gradle build**. The Gradle files from the old monorepo were
-stale and wrong for this app (wrong applicationId/version, Media3 deps the
-player does not use) and were deliberately not carried over.
+3.0 uses Gradle/AGP with the existing Java UI and libVLC. The old monorepo's
+Gradle configuration remains obsolete; do not restore it or its Media3 setup.
 
-- `bash build.sh` — the only build. Manual chain: aapt2 → javac → d8 →
-  zipalign → apksigner. Output `build-manual/ikantv.apk`.
+- `bash build.sh` — the only release entry: restore/check assets and dependencies,
+  run core JUnit regressions, assemble/sign with AGP, assert APK identity/content.
+  Output `build-manual/ikantv.apk` (the path is retained for CI compatibility).
   Needs JDK 17 and `ANDROID_HOME` (platform 34, build-tools 34.0.0).
+- `tools/gradle.sh` bootstraps Gradle 8.14.7 with pinned SHA-256; AGP is 8.6.1.
+  Do not commit a binary wrapper. New dependency versions are locked in
+  `app/gradle.lockfile`; update the lock deliberately when changing dependencies.
 - `bash tools/fetch-deps.sh` — downloads libVLC-all 3.5.1 + Jsoup 1.18.3 from
   Maven Central with pinned SHA-256 into `build-deps/` (run automatically
   by `build.sh`).
 - CI is the same `bash build.sh` on GitHub Actions
   (`.github/workflows/build.yml`); every push to `main` must stay green.
-- No automated test suite exists. Verification is: build passes, then
-  install on the real box and drive it with the remote. Claims about
+- Core tests live in `tests/java/` and run via `:app:testReleaseUnitTest`.
+  Verification also requires installing on the real box and driving it with
+  the remote. Claims about
   playback or focus behavior require that on-device check — do not assert
   them from code reading alone.
 
@@ -50,10 +54,13 @@ upgrade in place only when versionCode increases and the signature matches.
   carries a generation number; late callbacks from an old line are
   discarded. Manual source switching takes priority over automatic
   switching (1.5s throttle). See `docs/research/source-switch-crash-review.md`.
-- **libVLC resources are load-bearing.** `thirdparty/vlc-res/` must be
-  compiled in with `--extra-packages org.videolan`, or `VLCVideoLayout`
-  crashes the player on open. Do not substitute the full AAR `res/` —
-  the manual chain links only these files.
+- **libVLC resources are load-bearing.** AGP consumes the full pinned libVLC
+  AAR and generates `org.videolan.R`. `tools/verify-apk.sh` asserts the VLC
+  layouts, generated R class and three ARM native libraries. Do not strip these
+  resources or revive the manual aapt2 resource workaround.
+- **Logical episodes** are built by `PlaybackCatalog`; TV leading-zero aliases
+  merge while movie versions, seasons and episode parts stay separate. Preserve
+  Base64 resume names, old indexes and active-player migration when changing it.
 - **Data layer** (`data/`): plain HTTPS fetches + Jsoup parsing of the
   site's server-rendered HTML; playback lines come from a natively
   computed token (WebView harvesting is only a legacy fallback inside
@@ -90,9 +97,10 @@ on the real TV and are final:
   `.gitignore` keeps the restored files out of the tree. Adding a binary
   asset means adding its `.b64` + manifest line, never committing the raw
   binary (the upload path for this repo rejects non-UTF-8 files).
-- Dependencies are **fetched, never vendored**: only libVLC-all and Jsoup,
-  pinned by version + SHA-256 in `tools/fetch-deps.sh`. Prefer libraries
-  already in use over new ones; no AndroidX in the manual chain.
+- Dependencies are **fetched, never vendored**: libVLC-all and Jsoup keep their
+  version + SHA-256 pins in `tools/fetch-deps.sh`; RecyclerView 1.3.2 and Glide
+  4.16.0 use Maven repositories and Gradle locking. Tests use JUnit 4.13.2.
+  Prefer libraries already in use over new ones.
 - Keep the tree clean: no build output, no APKs, no page snapshots, no
   placeholder files "for structure". Follow Occam's razor — small
   single-purpose files that only hold fields are merged, not kept.

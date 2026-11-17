@@ -1,6 +1,9 @@
 # Build output & fetched dependencies (rebuilt / re-downloaded by build.sh)
 build-manual/
 build-deps/
+build-cache/
+app/build/
+build/
 *.apk
 
 # Signing material: the plain keystore NEVER goes into git.
