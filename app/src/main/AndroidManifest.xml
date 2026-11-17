@@ -25,8 +25,7 @@
             android:launchMode="singleTask"
             android:screenOrientation="landscape" />
 
-        <!-- 原生版唯一桌面入口（2026-11-04 分包：本应用只有原生浏览层；
-             WebView 原站模式是另一个独立应用「爱看电视」，经 NavHelper 跨包兜底） -->
+        <!-- 原生版唯一桌面入口；站点错误仅在本应用内提示重试。 -->
         <activity
             android:name=".ui.NativeHomeActivity"
             android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|smallestScreenSize|uiMode"

@@ -26,7 +26,7 @@ import java.util.List;
 /**
  * 原生首页（Emby 风格海报墙）：顶部入口行 + 纵向板块，每板块一条横向海报轨道。
  * 数据来自站点首页 HTML 的原生解析（IkanDataSource），点海报直达现有原生播放器。
- * 撞 Cloudflare 校验/解析失效时自动降级到 WebView 原站模式（MainActivity）。
+ * 遇到站点校验或解析失败时，在本页显示可用遥控器操作的重试入口。
  */
 public class NativeHomeActivity extends NativeBrowseActivity {
 
@@ -167,7 +167,8 @@ public class NativeHomeActivity extends NativeBrowseActivity {
             rail.setOrientation(LinearLayout.HORIZONTAL);
             rail.setClipChildren(false);
             rail.setClipToPadding(false);
-            rail.setPadding(dp(48), dp(4), dp(48), dp(8));
+            // 12dp 上下缓冲容纳 1.05 焦点缩放，卡框不会贴住板块标题或裁切。
+            rail.setPadding(dp(48), dp(12), dp(48), dp(12));
             for (int i = 0; i < 7; i++) {
                 View block = new View(this);
                 block.setBackgroundResource(R.drawable.skeleton_block);
@@ -289,8 +290,10 @@ public class NativeHomeActivity extends NativeBrowseActivity {
     private View buildRail(Section section) {
         HorizontalScrollView scroll = new HorizontalScrollView(this);
         scroll.setHorizontalScrollBarEnabled(false);
-        scroll.setClipChildren(false);
-        scroll.setClipToPadding(false);
+        // Keep the rail within its viewport; the 48dp side padding still gives
+        // edge cards room for their 1.05 focus scale.
+        scroll.setClipChildren(true);
+        scroll.setClipToPadding(true);
         LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT);
@@ -300,7 +303,8 @@ public class NativeHomeActivity extends NativeBrowseActivity {
         rail.setOrientation(LinearLayout.HORIZONTAL);
         rail.setClipChildren(false);
         rail.setClipToPadding(false);
-        rail.setPadding(dp(48), dp(4), dp(48), dp(8));
+        // 焦点缩放伸入这里的留白，不向板块标题、轨道视口边界外绘制。
+        rail.setPadding(dp(48), dp(12), dp(48), dp(12));
         int railIndex = 0;
         for (VideoItem item : section.items) {
             PosterCardView card = new PosterCardView(this, 132);

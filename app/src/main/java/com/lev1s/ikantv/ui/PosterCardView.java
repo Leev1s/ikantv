@@ -4,16 +4,19 @@ import android.content.Context;
 import android.graphics.Outline;
 import android.graphics.Canvas;
 import android.graphics.Paint;
+import android.graphics.Rect;
 import android.animation.ValueAnimator;
-import android.text.TextUtils;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
+import android.view.ViewParent;
 import android.view.ViewOutlineProvider;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
+
+import androidx.recyclerview.widget.RecyclerView;
 
 import com.lev1s.ikantv.R;
 import com.lev1s.ikantv.data.VideoItem;
@@ -29,13 +32,10 @@ public class PosterCardView extends LinearLayout {
     private final TextView rankBadge;
     private final TextView bigRankView;
     private final TextView titleView;
-    private final TextView subtitleView;
     private final Paint focusPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private ValueAnimator focusAnimator;
     private float focusAlpha;
-    private final Runnable startMarquee = this::startTitleMarquee;
-
-    private void startTitleMarquee() { titleView.setSelected(true); }
+    private View.OnFocusChangeListener posterFocusChangeListener;
 
     /** @param widthDp 卡片总宽（dp），海报高按 2:3 推导 */
     public PosterCardView(Context context, int widthDp) {
@@ -92,37 +92,24 @@ public class PosterCardView extends LinearLayout {
 
         titleView = new TextView(context);
         titleView.setTextColor(0xFFFFFFFF);
-        titleView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17);
+        titleView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
         titleView.setGravity(Gravity.CENTER);
-        titleView.setSingleLine(true);
-        titleView.setEllipsize(TextUtils.TruncateAt.END);
+        titleView.setMinLines(2);
+        titleView.setMaxLines(2);
+        titleView.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        titleView.setLineSpacing(dp(1), 1f);
         LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(
-                LayoutParams.MATCH_PARENT, dp(24));
+                LayoutParams.MATCH_PARENT, dp(48));
         tp.topMargin = dp(6);
         addView(titleView, tp);
-
-        subtitleView = new TextView(context);
-        subtitleView.setTextColor(0xFFB3B3B3);
-        subtitleView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-        subtitleView.setGravity(Gravity.CENTER);
-        subtitleView.setSingleLine(true);
-        subtitleView.setEllipsize(TextUtils.TruncateAt.END);
-        LinearLayout.LayoutParams sub = new LinearLayout.LayoutParams(
-                LayoutParams.MATCH_PARENT, dp(20));
-        sub.topMargin = dp(4);
-        addView(subtitleView, sub);
 
         setLayoutParams(new LayoutParams(dp(widthDp), LayoutParams.WRAP_CONTENT));
 
         setOnFocusChangeListener((v, hasFocus) -> {
-            v.animate().scaleX(hasFocus ? 1.08f : 1.0f)
-                    .scaleY(hasFocus ? 1.08f : 1.0f)
+            v.animate().cancel();
+            v.animate().scaleX(hasFocus ? 1.05f : 1.0f)
+                    .scaleY(hasFocus ? 1.05f : 1.0f)
                     .setDuration(200).start();
-            removeCallbacks(startMarquee);
-            titleView.setSelected(false);
-            titleView.setEllipsize(hasFocus ? TextUtils.TruncateAt.MARQUEE : TextUtils.TruncateAt.END);
-            titleView.setMarqueeRepeatLimit(-1);
-            if (hasFocus) postDelayed(startMarquee, 800);
             if (focusAnimator != null) focusAnimator.cancel();
             focusAnimator = ValueAnimator.ofFloat(focusAlpha, hasFocus ? 1f : 0f);
             focusAnimator.setDuration(200);
@@ -131,10 +118,10 @@ public class PosterCardView extends LinearLayout {
                 invalidate();
             });
             focusAnimator.start();
-            // 放大时压住邻卡靠抬 Z 轴，绝不能用 bringToFront()：它会把卡片
-            // 在父 LinearLayout 里挪到末位——真机实测曾把历史页/榜单/首页
-            // 轨道的首卡「瞬移」到行尾（顺序错乱，2026-11-04 验收抓到）
-            v.setTranslationZ(hasFocus ? 8f : 0f);
+            if (hasFocus) requestExpandedFocusBoundsOnScreen();
+            if (posterFocusChangeListener != null) {
+                posterFocusChangeListener.onFocusChange(v, hasFocus);
+            }
         });
     }
 
@@ -142,12 +129,15 @@ public class PosterCardView extends LinearLayout {
     protected void dispatchDraw(Canvas canvas) {
         super.dispatchDraw(canvas);
         focusPaint.setAlpha((int) (focusAlpha * 255));
-        float inset = dp(4);
-        canvas.drawRect(-inset, -inset, getWidth() + inset, getHeight() + inset, focusPaint);
+        // Focus is painted inside the card bounds. The 1.05 scale is given room by
+        // the row/viewport padding, so no ancestor needs to draw beyond its clip.
+        float inset = focusPaint.getStrokeWidth() / 2f;
+        canvas.drawRect(inset, inset, getWidth() - inset, getHeight() - inset, focusPaint);
     }
 
     public void bind(VideoItem item, PosterLoader loader) {
-        titleView.setText(item.title);
+        final String title = item.title == null ? "" : item.title;
+        titleView.setText(title);
         boolean hasPoster = item.posterCandidates != null && !item.posterCandidates.isEmpty();
         if (item.rank > 0) {
             rankBadge.setText(String.valueOf(item.rank));
@@ -159,18 +149,45 @@ public class PosterCardView extends LinearLayout {
             bigRankView.setVisibility(GONE);
             // 候选全是死链时回调亮首字，别留黑框（真机见过整块发黑的「海报」）
             loader.load(posterView, item.posterCandidates, () -> {
-                bigRankView.setText(item.title.isEmpty() ? ""
-                        : item.title.substring(0, 1));
+                bigRankView.setText(title.isEmpty() ? "" : title.substring(0, 1));
                 bigRankView.setVisibility(VISIBLE);
             });
         } else {
             // 无海报（榜单文本条）：海报区显示大号名次，没名次就显示标题首字
-            posterView.setImageDrawable(null);
-            posterView.setTag(null);
+            loader.clear(posterView);
             bigRankView.setText(item.rank > 0 ? String.valueOf(item.rank)
-                    : (item.title.isEmpty() ? "" : item.title.substring(0, 1)));
+                    : (title.isEmpty() ? "" : title.substring(0, 1)));
             bigRankView.setVisibility(VISIBLE);
         }
+    }
+
+    public void clearPoster(PosterLoader loader) {
+        loader.clear(posterView);
+    }
+
+    public void setPosterFocusChangeListener(View.OnFocusChangeListener listener) {
+        posterFocusChangeListener = listener;
+    }
+
+    private void requestExpandedFocusBoundsOnScreen() {
+        if (hasRecyclerViewAncestor()) return;
+        post(() -> {
+            if (!hasFocus() || getWidth() == 0 || getHeight() == 0) return;
+            Rect visibleBounds = new Rect(0, 0, getWidth(), getHeight());
+            int outset = dp(8);
+            visibleBounds.inset(-outset, -outset);
+            requestRectangleOnScreen(visibleBounds, true);
+        });
+    }
+
+    private boolean hasRecyclerViewAncestor() {
+        ViewParent parent = getParent();
+        while (parent != null) {
+            if (parent instanceof RecyclerView) return true;
+            if (!(parent instanceof View)) return false;
+            parent = ((View) parent).getParent();
+        }
+        return false;
     }
 
     private int dp(int v) {

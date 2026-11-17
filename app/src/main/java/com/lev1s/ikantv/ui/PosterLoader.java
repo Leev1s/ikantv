@@ -1,250 +1,160 @@
 package com.lev1s.ikantv.ui;
 
 import android.content.Context;
-import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
-import android.os.Handler;
-import android.os.Looper;
-import android.util.LruCache;
+import android.graphics.drawable.Drawable;
 import android.widget.ImageView;
 
+import com.bumptech.glide.Glide;
+import com.bumptech.glide.load.DataSource;
+import com.bumptech.glide.load.engine.DiskCacheStrategy;
+import com.bumptech.glide.load.engine.GlideException;
+import com.bumptech.glide.load.model.GlideUrl;
+import com.bumptech.glide.load.model.LazyHeaders;
+import com.bumptech.glide.request.RequestListener;
+import com.bumptech.glide.request.target.Target;
+import com.bumptech.glide.request.target.ViewTarget;
+import com.lev1s.ikantv.R;
 import com.lev1s.ikantv.data.HttpFetcher;
 
-import java.io.ByteArrayOutputStream;
-import java.io.File;
-import java.io.FileOutputStream;
-import java.io.InputStream;
-import java.net.HttpURLConnection;
-import java.net.URL;
-import java.security.MessageDigest;
+import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
 /**
- * 轻量海报加载（按可行性报告选型自研，不引 Glide/Picasso 以适配手工构建链）：
- * 内存 LRU + 磁盘缓存两级，按显示尺寸降采样解码（目标宽见 REQ_WIDTH），
- * 候选 URL 链逐个回退。下载不调用 disconnect()，响应流读尽关闭后连接回
- * 平台连接池复用（性能评审 P1：海报候选首选恒为同一 host，逐张重付
- * TCP+TLS 握手是网格页出图慢的主因之一）。
+ * 海报加载入口：Glide 负责请求生命周期、解码与有限缓存；本类保留站点要求的
+ * 请求头、候选 URL 顺序回退，以及候选耗尽时给卡片亮首字的回调。
  */
-public class PosterLoader {
+public final class PosterLoader {
 
-    // 解码目标宽（px）：海报卡内图宽 = 卡宽 − 10dp 内边距。720p UI 下卡宽
-    // 随密度在约 80–134dp 间浮动，内图约 70–124dp，折算物理像素约
-    // 140–250px（密度 1.33–2.0）。取 240 使采样后的解码宽落在 [240, 480)，
-    // 覆盖最高密度下的显示需求又不至于普遍 2 倍以上过采样（性能评审 P3：
-    // 旧值 264 时解码宽落在 [264, 528)，单张位图 0.42–1.67MB 挤占 LRU）。
-    private static final int REQ_WIDTH = 240;
+    // 海报卡在 720p 六列布局中的显示宽约 180px；240×360 留少量清晰度余量，
+    // 并避免把原始大图长期解码进 32 位设备的位图缓存。
+    private static final int REQUEST_WIDTH_PX = 240;
+    private static final int REQUEST_HEIGHT_PX = 360;
+    private static final String REFERER = "https://www.ikanbot.com/";
+    private static final int REQUEST_STATE_TAG = R.id.poster_request_state;
+    private static final LazyHeaders HEADERS = new LazyHeaders.Builder()
+            .addHeader("User-Agent", HttpFetcher.DESKTOP_UA)
+            .addHeader("Referer", REFERER)
+            .build();
+
     private static PosterLoader instance;
 
     public static synchronized PosterLoader get(Context ctx) {
-        if (instance == null) instance = new PosterLoader(ctx.getApplicationContext());
+        if (instance == null) instance = new PosterLoader();
         return instance;
     }
 
-    private final LruCache<String, Bitmap> memCache;
-    private final File diskDir;
-    private final ExecutorService pool = Executors.newFixedThreadPool(4);
-    private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private final RequestListener<Drawable> requestListener = new RequestListener<Drawable>() {
+        @Override
+        public boolean onLoadFailed(GlideException e, Object model,
+                                    Target<Drawable> target, boolean isFirstResource) {
+            ImageView view = imageViewFor(target);
+            LoadState state = currentState(view);
+            if (state == null || !isCurrentCandidate(state, model)) return true;
 
-    private PosterLoader(Context ctx) {
-        int maxKb = (int) (Runtime.getRuntime().maxMemory() / 1024);
-        // 容量按「至少装下一整页网格」定：解码宽 240–480px 的海报位图单张
-        // 约 0.35–1.4MB（典型源图落在 250–340px 宽、约 0.4–0.7MB），48 张
-        // 一页约 19–33MB。取堆上限 1/4（128MB 堆 → 32MB）覆盖一页且滚动
-        // 回头不至于整页重解码（性能评审 P3：旧值 1/8 只能装 10–38 张），
-        // 下限 16MB 不低于旧版在 128MB 堆上的实际容量。
-        memCache = new LruCache<String, Bitmap>(Math.max(16 * 1024, maxKb / 4)) {
-            @Override protected int sizeOf(String key, Bitmap bmp) {
-                return bmp.getByteCount() / 1024;
-            }
-        };
-        // 新目录隔离旧版非原子写入时可能留下的截断缓存。
-        diskDir = new File(ctx.getCacheDir(), "posters3");
-        //noinspection ResultOfMethodCallIgnored
-        diskDir.mkdirs();
-    }
+            final int next = state.candidateIndex + 1;
+            view.post(() -> {
+                if (currentState(view) != state) return;
+                if (next < state.candidates.size()) {
+                    state.candidateIndex = next;
+                    startCandidate(view, state);
+                } else if (state.onExhausted != null) {
+                    state.onExhausted.run();
+                }
+            });
+            // The placeholder remains visible until the next candidate succeeds. In
+            // particular, do not start or clear a Glide request inside this callback.
+            return true;
+        }
 
-    /** 把候选链的第一条当缓存键；加载失败（全链皆挂）时保持占位底色，不报错。 */
+        @Override
+        public boolean onResourceReady(Drawable resource, Object model,
+                                       Target<Drawable> target, DataSource dataSource,
+                                       boolean isFirstResource) {
+            ImageView view = imageViewFor(target);
+            LoadState state = currentState(view);
+            // Return true for stale work so Glide does not put it into a recycled view.
+            return state == null || !isCurrentCandidate(state, model);
+        }
+    };
+
+    private PosterLoader() { }
+
+    /** The candidate list's order is the fallback priority. */
     public void load(ImageView view, List<String> candidates) {
         load(view, candidates, null);
     }
 
-    /**
-     * 带失败回调的加载：候选链全部失败时在主线程跑 onExhausted（卡片据此
-     * 亮出首字占位，别留一块黑框——死链海报真机出现过）。
-     */
-    public void load(ImageView view, List<String> candidates, Runnable onExhausted) {
-        if (candidates == null || candidates.isEmpty()) {
-            view.setTag(null);
-            view.setImageDrawable(null);
-            return;
-        }
-        final String key = candidates.get(0);
-        view.setTag(key);
-        Bitmap hit = memCache.get(key);
-        if (hit != null) {
-            view.setImageBitmap(hit);
-            return;
-        }
+    /** Cancels the view's old request and discards its generation marker. */
+    public void clear(ImageView view) {
+        view.setTag(REQUEST_STATE_TAG, null);
+        Glide.with(view).clear(view);
         view.setImageDrawable(null);
-        final List<String> chain = candidates;
-        pool.execute(() -> {
-            Bitmap bmp = loadBitmap(key, chain);
-            if (bmp != null) memCache.put(key, bmp);
-            final Bitmap result = bmp;
-            mainHandler.post(() -> {
-                if (!key.equals(view.getTag())) return;
-                if (result != null) {
-                    view.setImageBitmap(result);
-                } else if (onExhausted != null) {
-                    onExhausted.run();
-                }
-            });
-        });
     }
 
-    private Bitmap loadBitmap(String key, List<String> chain) {
-        File f = diskFile(key);
-        if (f.isFile() && f.length() > 0) {
-            Bitmap b = decodeFile(f);
-            if (b != null) return b;
+    /** Runs on the main thread after every candidate has failed. */
+    public void load(ImageView view, List<String> candidates, Runnable onExhausted) {
+        if (candidates == null || candidates.isEmpty()) {
+            clear(view);
+            return;
         }
-        for (String url : chain) {
-            // 同址最多两次：第一次拿到截断数据（代理回源不全）时重试一次，
-            // 截断是瞬时故障，重试常能拿全；网络/HTTP 失败直接换下一条候选
-            for (int attempt = 0; attempt < 2; attempt++) {
-                byte[] data = download(url);
-                if (data == null) break;
-                if (!looksComplete(data)) continue;
-                Bitmap b = decodeBytes(data);
-                if (b != null) {
-                    writeQuietly(f, data);
-                    return b;
-                }
-                break;
-            }
+
+        List<String> urls = new ArrayList<>(candidates.size());
+        for (String candidate : candidates) {
+            if (candidate != null && !candidate.isEmpty()) urls.add(candidate);
+        }
+        if (urls.isEmpty()) {
+            clear(view);
+            return;
+        }
+        LoadState state = new LoadState(urls, onExhausted);
+        view.setTag(REQUEST_STATE_TAG, state);
+        startCandidate(view, state);
+    }
+
+    private void startCandidate(ImageView view, LoadState state) {
+        if (currentState(view) != state || state.candidateIndex >= state.candidates.size()) return;
+        String url = state.candidates.get(state.candidateIndex);
+        Glide.with(view)
+                .load(new GlideUrl(url, HEADERS))
+                .override(REQUEST_WIDTH_PX, REQUEST_HEIGHT_PX)
+                .centerCrop()
+                .placeholder(R.drawable.poster_ph)
+                .error(R.drawable.poster_ph)
+                .diskCacheStrategy(DiskCacheStrategy.AUTOMATIC)
+                .listener(requestListener)
+                .into(view);
+    }
+
+    private static ImageView imageViewFor(Target<Drawable> target) {
+        if (target instanceof ViewTarget) {
+            android.view.View view = ((ViewTarget<?, ?>) target).getView();
+            if (view instanceof ImageView) return (ImageView) view;
         }
         return null;
     }
 
-    /**
-     * 图片完整性粗验：BitmapFactory 对截断的 JPEG/PNG 不报错、只解出上半截
-     * （下半截发黑/噪点），所以必须在字节层先判完整再解码、再进缓存。
-     * JPEG 看结尾的 EOI（FFD9），PNG 看 IEND；其他格式不判、直接放行。
-     */
-    private static boolean looksComplete(byte[] d) {
-        if (d.length < 4) return false;
-        if ((d[0] & 0xFF) == 0xFF && (d[1] & 0xFF) == 0xD8) {
-            return tailContains(d, new byte[]{(byte) 0xFF, (byte) 0xD9}, 2048);
-        }
-        if ((d[0] & 0xFF) == 0x89 && d[1] == 'P' && d[2] == 'N' && d[3] == 'G') {
-            return tailContains(d, new byte[]{0x49, 0x45, 0x4E, 0x44,
-                    (byte) 0xAE, 0x42, 0x60, (byte) 0x82}, 256);
-        }
-        return true;
+    private static LoadState currentState(ImageView view) {
+        if (view == null) return null;
+        Object value = view.getTag(REQUEST_STATE_TAG);
+        return value instanceof LoadState ? (LoadState) value : null;
     }
 
-    private static boolean tailContains(byte[] d, byte[] sig, int window) {
-        int from = Math.max(0, d.length - window);
-        outer:
-        for (int i = d.length - sig.length; i >= from; i--) {
-            for (int j = 0; j < sig.length; j++) {
-                if (d[i + j] != sig[j]) continue outer;
-            }
-            return true;
-        }
-        return false;
+    private static boolean isCurrentCandidate(LoadState state, Object model) {
+        if (state.candidateIndex >= state.candidates.size()) return false;
+        String current = state.candidates.get(state.candidateIndex);
+        String loaded = model instanceof GlideUrl
+                ? ((GlideUrl) model).toStringUrl() : String.valueOf(model);
+        return current.equals(loaded);
     }
 
-    private File diskFile(String key) {
-        try {
-            MessageDigest md = MessageDigest.getInstance("MD5");
-            byte[] dig = md.digest(key.getBytes("UTF-8"));
-            StringBuilder sb = new StringBuilder();
-            for (byte b : dig) sb.append(String.format("%02x", b & 0xFF));
-            return new File(diskDir, sb.toString() + ".img");
-        } catch (Exception e) {
-            return new File(diskDir, Integer.toHexString(key.hashCode()) + ".img");
-        }
-    }
+    private static final class LoadState {
+        final List<String> candidates;
+        final Runnable onExhausted;
+        int candidateIndex;
 
-    private byte[] download(String url) {
-        HttpURLConnection c = null;
-        try {
-            c = (HttpURLConnection) new URL(url).openConnection();
-            c.setConnectTimeout(6000);
-            c.setReadTimeout(9000);
-            c.setRequestProperty("User-Agent", HttpFetcher.DESKTOP_UA);
-            c.setRequestProperty("Referer", "https://www.ikanbot.com/");
-            if (c.getResponseCode() != 200) {
-                // 非 200 也把错误流关掉，连接才有机会回池复用
-                try (InputStream es = c.getErrorStream()) {
-                    //noinspection StatementWithEmptyBody
-                    while (es != null && es.read(new byte[4096]) > 0) { }
-                } catch (Exception ignored) { }
-                return null;
-            }
-            int declared = c.getContentLength();
-            try (InputStream is = c.getInputStream()) {
-                ByteArrayOutputStream bos = new ByteArrayOutputStream();
-                byte[] buf = new byte[8192];
-                int n, total = 0;
-                while ((n = is.read(buf)) > 0) {
-                    bos.write(buf, 0, n);
-                    total += n;
-                    if (total > 1_500_000) return null;
-                }
-                // 服务器报了长度却没读满 = 截断，当失败处理（别把半截图喂给解码器）
-                if (declared > 0 && total != declared) return null;
-                return bos.toByteArray();
-            }
-        } catch (Exception e) {
-            return null;
-        }
-        // 不 disconnect()：成功路径的响应流已读尽并由 try-with-resources
-        // 关闭，连接回池供同 host 后续请求复用；异常路径流未读尽，平台会
-        // 自行弃用该连接，同样不泄漏（性能评审 P1）。
-    }
-
-    private Bitmap decodeBytes(byte[] data) {
-        BitmapFactory.Options bounds = new BitmapFactory.Options();
-        bounds.inJustDecodeBounds = true;
-        BitmapFactory.decodeByteArray(data, 0, data.length, bounds);
-        if (bounds.outWidth <= 0) return null;
-        BitmapFactory.Options opt = new BitmapFactory.Options();
-        opt.inSampleSize = sampleSize(bounds.outWidth);
-        return BitmapFactory.decodeByteArray(data, 0, data.length, opt);
-    }
-
-    private Bitmap decodeFile(File f) {
-        BitmapFactory.Options bounds = new BitmapFactory.Options();
-        bounds.inJustDecodeBounds = true;
-        BitmapFactory.decodeFile(f.getAbsolutePath(), bounds);
-        if (bounds.outWidth <= 0) return null;
-        BitmapFactory.Options opt = new BitmapFactory.Options();
-        opt.inSampleSize = sampleSize(bounds.outWidth);
-        return BitmapFactory.decodeFile(f.getAbsolutePath(), opt);
-    }
-
-    private static int sampleSize(int width) {
-        int s = 1;
-        while (width / (s * 2) >= REQ_WIDTH) s *= 2;
-        return s;
-    }
-
-    private void writeQuietly(File f, byte[] data) {
-        File temp = null;
-        try {
-            temp = File.createTempFile("poster-", ".tmp", diskDir);
-            try (FileOutputStream out = new FileOutputStream(temp)) {
-                out.write(data);
-            }
-            if (temp.renameTo(f)) temp = null;
-        } catch (Exception ignored) {
-        } finally {
-            if (temp != null) temp.delete();
+        LoadState(List<String> candidates, Runnable onExhausted) {
+            this.candidates = candidates;
+            this.onExhausted = onExhausted;
         }
     }
 }

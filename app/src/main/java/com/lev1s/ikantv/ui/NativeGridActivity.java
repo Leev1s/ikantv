@@ -1,5 +1,6 @@
 package com.lev1s.ikantv.ui;
 
+import android.graphics.Rect;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -12,6 +13,9 @@ import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
+
+import androidx.recyclerview.widget.GridLayoutManager;
+import androidx.recyclerview.widget.RecyclerView;
 
 import com.lev1s.ikantv.R;
 import com.lev1s.ikantv.data.FetchException;
@@ -45,11 +49,15 @@ public class NativeGridActivity extends NativeBrowseActivity {
     public static final String KIND_SEARCH = "search";
 
     private static final int COLUMNS = 6;
+    private static final String STATE_POSTER_ID = "grid_poster_id";
 
     private TextView titleView;
     private TextView emptyView;
     private LinearLayout tagRow;
     private ScrollView scrollView;
+    private RecyclerView posterRecycler;
+    private GridLayoutManager posterLayoutManager;
+    private PosterGridAdapter posterAdapter;
     private LinearLayout container;
     private TextView footer;
     private LinearLayout skeleton;
@@ -64,6 +72,14 @@ public class NativeGridActivity extends NativeBrowseActivity {
     private boolean destroyed = false;
     private int loadGen = 0;
     private int cardWidthDp;
+    private boolean recyclerPosterMode;
+    private long selectedPosterId = RecyclerView.NO_ID;
+    private long lastFocusedPosterId = RecyclerView.NO_ID;
+    private int resumeFocusInteractionCount;
+    private boolean pendingFooterFocusReturn;
+    private int pendingFooterFocusInteractionCount;
+    private boolean restorePosterFocusOnResume = false;
+    private boolean restorePosterFocusAfterLoad = false;
     private final List<PosterCardView> rowBuffer = new ArrayList<>();
     private boolean firstFocusDone = false;
     private final Runnable skeletonFailsafe = () -> {
@@ -84,6 +100,7 @@ public class NativeGridActivity extends NativeBrowseActivity {
         emptyView = findViewById(R.id.grid_empty);
         tagRow = findViewById(R.id.tag_row);
         scrollView = findViewById(R.id.grid_scroll);
+        posterRecycler = findViewById(R.id.grid_recycler);
         container = findViewById(R.id.grid_container);
         footer = findViewById(R.id.footer_text);
         skeleton = findViewById(R.id.grid_skeleton);
@@ -91,8 +108,13 @@ public class NativeGridActivity extends NativeBrowseActivity {
 
         kind = getIntent().getStringExtra(EXTRA_KIND);
         if (kind == null) kind = KIND_HOT;
+        recyclerPosterMode = KIND_HOT.equals(kind) || KIND_CATEGORY.equals(kind);
         firstUrl = getIntent().getStringExtra(EXTRA_URL);
         query = getIntent().getStringExtra(EXTRA_QUERY);
+        if (savedInstanceState != null) {
+            selectedPosterId = savedInstanceState.getLong(STATE_POSTER_ID, RecyclerView.NO_ID);
+            restorePosterFocusAfterLoad = selectedPosterId != RecyclerView.NO_ID;
+        }
         String title = getIntent().getStringExtra(EXTRA_TITLE);
         titleView.setText(title == null ? "" : title);
         TabBar.Tab cur = currentTab(kind, title);
@@ -114,6 +136,13 @@ public class NativeGridActivity extends NativeBrowseActivity {
         // 定版公式：卡宽 = (布局宽 − 页面边距 48×2 − 卡间距 12×(列数−1)) ÷ 列数
         cardWidthDp = (screenDp - 96 - (COLUMNS - 1) * 12) / COLUMNS;
 
+        if (recyclerPosterMode) {
+            setupPosterRecycler();
+        } else {
+            posterRecycler.setVisibility(View.GONE);
+            scrollView.setVisibility(View.VISIBLE);
+        }
+
         buildSkeleton();
         buildTags();
         // 空态按 OK = 重试加载：与首页错误文案、页脚重试同一约定（点这里再试
@@ -127,7 +156,12 @@ public class NativeGridActivity extends NativeBrowseActivity {
             if (nextPageUrl != null && !loadingPage) loadNextPage();
             else if (!loadingPage) loadFirst();
         });
-        scrollView.setOnScrollChangeListener((v, sx, sy, osx, osy) -> maybeLoadMore());
+        footer.setOnFocusChangeListener((v, hasFocus) -> {
+            if (hasFocus) updateFooterUpRoute();
+        });
+        scrollView.setOnScrollChangeListener((v, sx, sy, osx, osy) -> {
+            if (!recyclerPosterMode) maybeLoadMore();
+        });
 
         loadFirst();
     }
@@ -141,12 +175,64 @@ public class NativeGridActivity extends NativeBrowseActivity {
         return TabBar.Tab.NONE;
     }
 
+    private void setupPosterRecycler() {
+        scrollView.setVisibility(View.GONE);
+        posterRecycler.setVisibility(View.VISIBLE);
+        posterRecycler.setClipChildren(false);
+        posterRecycler.setClipToPadding(false);
+        posterLayoutManager = new GridLayoutManager(this, COLUMNS) {
+            @Override
+            public boolean requestChildRectangleOnScreen(RecyclerView parent,
+                                                         View child,
+                                                         Rect rect,
+                                                         boolean immediate,
+                                                         boolean focusedChildVisible) {
+                // Keep RecyclerView's default focus/layout guard in onRequestChildFocus.
+                // Once that guard allows a visibility request, scroll immediately so a
+                // D-pad burst cannot leave a smooth-scroll window between focus steps.
+                return super.requestChildRectangleOnScreen(parent, child, rect, true,
+                        focusedChildVisible);
+            }
+        };
+        posterRecycler.setLayoutManager(posterLayoutManager);
+        posterRecycler.addItemDecoration(new RecyclerView.ItemDecoration() {
+            private final int spacing = dp(6);
+
+            @Override
+            public void getItemOffsets(android.graphics.Rect outRect, View view,
+                                       RecyclerView parent, RecyclerView.State state) {
+                outRect.set(spacing, spacing, spacing, spacing);
+            }
+        });
+        posterAdapter = new PosterGridAdapter(this, cardWidthDp, posterLoader,
+                item -> {
+                    selectedPosterId = PosterGridAdapter.stableId(item);
+                    lastFocusedPosterId = selectedPosterId;
+                    restorePosterFocusOnResume = true;
+                    resumeFocusInteractionCount = interactionCount;
+                    restorePosterFocusAfterLoad = false;
+                    NavHelper.openItem(this, item);
+                },
+                id -> {
+                    selectedPosterId = id;
+                    lastFocusedPosterId = id;
+                });
+        posterRecycler.setAdapter(posterAdapter);
+        posterRecycler.addOnScrollListener(new RecyclerView.OnScrollListener() {
+            @Override
+            public void onScrolled(RecyclerView recyclerView, int dx, int dy) {
+                maybeLoadMoreFromRecycler();
+            }
+        });
+    }
+
     private void showEmpty(String msg) {
         emptyView.setText(msg);
         emptyView.setVisibility(View.VISIBLE);
         emptyView.post(() -> {
             if (!destroyed && interactionCount == 0) emptyView.requestFocus();
         });
+        restorePendingFooterFocusTo(emptyView);
     }
 
     private final List<TextView> tagChips = new ArrayList<>();
@@ -173,6 +259,10 @@ public class NativeGridActivity extends NativeBrowseActivity {
             chip.setLayoutParams(lp);
             chip.setOnClickListener(v -> {
                 if (url.equals(firstUrl)) return;
+                selectedPosterId = RecyclerView.NO_ID;
+                restorePosterFocusOnResume = false;
+                restorePosterFocusAfterLoad = false;
+                if (posterLayoutManager != null) posterLayoutManager.scrollToPosition(0);
                 firstUrl = url;
                 refreshTagStyles();
                 loadFirst();
@@ -236,12 +326,15 @@ public class NativeGridActivity extends NativeBrowseActivity {
     // ---------------- 加载 ----------------
 
     private void loadFirst() {
+        pendingFooterFocusReturn = footer.hasFocus();
+        pendingFooterFocusInteractionCount = interactionCount;
         final int gen = ++loadGen;
         loadingPage = true;
         nextPageUrl = null;
         firstFocusDone = false;
         rowBuffer.clear();
         container.removeAllViews();
+        if (posterAdapter != null) posterAdapter.clear();
         emptyView.setVisibility(View.GONE);
         showSkeleton();
         footer.setVisibility(View.GONE);
@@ -272,6 +365,8 @@ public class NativeGridActivity extends NativeBrowseActivity {
                                     : "这里暂时没有内容");
                         } else {
                             updateFooter();
+                            if (page.items.isEmpty()) restorePendingFooterFocusTo(footer);
+                            else restorePendingFocusToFirstContent();
                         }
                     });
                 }
@@ -281,6 +376,7 @@ public class NativeGridActivity extends NativeBrowseActivity {
                     loadingPage = false;
                     hideSkeleton();
                     onLoadError(e, true);
+                    restorePendingFooterFocusTo(footer);
                 });
             }
         }).start();
@@ -348,9 +444,11 @@ public class NativeGridActivity extends NativeBrowseActivity {
         footer.setVisibility(View.VISIBLE);
         footer.setFocusable(true);
         if (interactionCount == 0) footer.requestFocus();
+        restorePendingFooterFocusTo(footer);
     }
 
     private void updateFooter() {
+        boolean wasFocused = footer.hasFocus();
         if (nextPageUrl == null) {
             footer.setText("— 没有更多了 —");
             footer.setVisibility(View.VISIBLE);
@@ -362,6 +460,11 @@ public class NativeGridActivity extends NativeBrowseActivity {
             footer.setFocusable(true);
             footer.setVisibility(View.VISIBLE);
         }
+        if (wasFocused && !footer.isFocusable() && recyclerPosterMode) {
+            final long wantedId = lastFocusedPosterId;
+            final int expectedInteractionCount = interactionCount;
+            footer.post(() -> returnFocusToPoster(wantedId, expectedInteractionCount));
+        }
     }
 
     private void maybeLoadMore() {
@@ -372,12 +475,35 @@ public class NativeGridActivity extends NativeBrowseActivity {
         if (diff < dp(500)) loadNextPage();
     }
 
+    private void maybeLoadMoreFromRecycler() {
+        if (posterAdapter == null || nextPageUrl == null || loadingPage) return;
+        int lastVisible = posterLayoutManager.findLastVisibleItemPosition();
+        if (lastVisible == RecyclerView.NO_POSITION) return;
+        int remaining = posterAdapter.getItemCount() - lastVisible - 1;
+        if (remaining <= COLUMNS) loadNextPage();
+    }
+
     // ---------------- 渲染 ----------------
 
     private void appendItems(List<VideoItem> items) {
         if (KIND_SEARCH.equals(kind)) {
             for (VideoItem item : items) container.addView(buildSearchRow(item));
             focusFirst();
+            return;
+        }
+        if (recyclerPosterMode) {
+            if (items.isEmpty()) return;
+            boolean firstPage = posterAdapter.getItemCount() == 0;
+            posterAdapter.append(items);
+            if (firstPage) {
+                if (restorePosterFocusAfterLoad) {
+                    restorePosterFocusAfterLoad = false;
+                    requestRestoredPosterFocus();
+                } else {
+                    focusFirstPoster();
+                }
+            }
+            posterRecycler.post(this::maybeLoadMoreFromRecycler);
             return;
         }
         for (VideoItem item : items) {
@@ -519,6 +645,139 @@ public class NativeGridActivity extends NativeBrowseActivity {
             View f = findFirstFocusable(container);
             if (f != null) f.requestFocus();
         });
+    }
+
+    private void focusFirstPoster() {
+        if (firstFocusDone) return;
+        firstFocusDone = true;
+        posterRecycler.post(() -> {
+            if (destroyed || interactionCount != 0 || posterAdapter.getItemCount() == 0) return;
+            RecyclerView.ViewHolder holder = posterRecycler.findViewHolderForAdapterPosition(0);
+            if (holder instanceof PosterGridAdapter.Holder) {
+                ((PosterGridAdapter.Holder) holder).card.requestFocus();
+            }
+        });
+    }
+
+    private void requestRestoredPosterFocus() {
+        if (selectedPosterId == RecyclerView.NO_ID) {
+            focusFirstPoster();
+            return;
+        }
+        final long wantedId = selectedPosterId;
+        posterRecycler.post(() -> requestPosterFocus(wantedId, true, 0));
+    }
+
+    private void requestPosterFocus(long wantedId, boolean allowFirstFallback,
+                                    int expectedInteractionCount) {
+        if (destroyed || interactionCount != expectedInteractionCount || posterAdapter == null) return;
+        int position = posterAdapter.positionOfId(wantedId);
+        if (position == RecyclerView.NO_POSITION) {
+            if (allowFirstFallback && posterAdapter.getItemCount() > 0) {
+                RecyclerView.ViewHolder first = posterRecycler.findViewHolderForAdapterPosition(0);
+                if (first instanceof PosterGridAdapter.Holder) {
+                    ((PosterGridAdapter.Holder) first).card.requestFocus();
+                }
+            }
+            return;
+        }
+        RecyclerView.ViewHolder holder = posterRecycler.findViewHolderForItemId(wantedId);
+        if (holder instanceof PosterGridAdapter.Holder) {
+            ((PosterGridAdapter.Holder) holder).card.requestFocus();
+            return;
+        }
+        posterLayoutManager.scrollToPosition(position);
+        posterRecycler.post(() -> {
+            if (destroyed || interactionCount != expectedInteractionCount) return;
+            RecyclerView.ViewHolder visible = posterRecycler.findViewHolderForAdapterPosition(position);
+            if (visible instanceof PosterGridAdapter.Holder) {
+                ((PosterGridAdapter.Holder) visible).card.requestFocus();
+            }
+        });
+    }
+
+    private void updateFooterUpRoute() {
+        if (posterRecycler == null || posterAdapter == null
+                || lastFocusedPosterId == RecyclerView.NO_ID) return;
+        int position = posterAdapter.positionOfId(lastFocusedPosterId);
+        if (position == RecyclerView.NO_POSITION) return;
+        RecyclerView.ViewHolder holder = posterRecycler.findViewHolderForAdapterPosition(position);
+        if (holder instanceof PosterGridAdapter.Holder) {
+            footer.setNextFocusUpId(((PosterGridAdapter.Holder) holder).card.getId());
+        }
+    }
+
+    private void restorePendingFooterFocusTo(View target) {
+        if (!pendingFooterFocusReturn) return;
+        pendingFooterFocusReturn = false;
+        final int expectedInteractionCount = pendingFooterFocusInteractionCount;
+        target.post(() -> {
+            if (!destroyed && interactionCount == expectedInteractionCount
+                    && target.getVisibility() == View.VISIBLE && target.isFocusable()) {
+                target.requestFocus();
+            }
+        });
+    }
+
+    private void restorePendingFocusToFirstContent() {
+        if (!pendingFooterFocusReturn) return;
+        pendingFooterFocusReturn = false;
+        final int expectedInteractionCount = pendingFooterFocusInteractionCount;
+        if (recyclerPosterMode && posterAdapter.getItemCount() > 0) {
+            final long firstId = posterAdapter.getItemId(0);
+            posterRecycler.post(() ->
+                    requestPosterFocus(firstId, false, expectedInteractionCount));
+        } else {
+            container.post(() -> {
+                if (destroyed || interactionCount != expectedInteractionCount) return;
+                View first = findFirstFocusable(container);
+                if (first != null) first.requestFocus();
+            });
+        }
+    }
+
+    private void returnFocusToPoster(long wantedId, int expectedInteractionCount) {
+        if (destroyed || interactionCount != expectedInteractionCount || posterAdapter == null) return;
+        int position = posterAdapter.positionOfId(wantedId);
+        if (position == RecyclerView.NO_POSITION) return;
+        RecyclerView.ViewHolder holder = posterRecycler.findViewHolderForAdapterPosition(position);
+        if (holder instanceof PosterGridAdapter.Holder) {
+            ((PosterGridAdapter.Holder) holder).card.requestFocus();
+            return;
+        }
+        posterLayoutManager.scrollToPosition(position);
+        posterRecycler.post(() -> {
+            if (destroyed || interactionCount != expectedInteractionCount) return;
+            RecyclerView.ViewHolder visible = posterRecycler.findViewHolderForAdapterPosition(position);
+            if (visible instanceof PosterGridAdapter.Holder) {
+                ((PosterGridAdapter.Holder) visible).card.requestFocus();
+            }
+        });
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (restorePosterFocusOnResume && recyclerPosterMode && posterRecycler != null) {
+            restorePosterFocusOnResume = false;
+            final long wantedId = selectedPosterId;
+            final int expectedInteractionCount = resumeFocusInteractionCount;
+            posterRecycler.post(() ->
+                    requestPosterFocus(wantedId, false, expectedInteractionCount));
+        }
+    }
+
+    @Override
+    protected void onSaveInstanceState(Bundle outState) {
+        if (posterRecycler != null) {
+            View focused = getCurrentFocus();
+            if (focused != null) {
+                RecyclerView.ViewHolder holder = posterRecycler.findContainingViewHolder(focused);
+                if (holder != null) selectedPosterId = holder.getItemId();
+            }
+            outState.putLong(STATE_POSTER_ID, selectedPosterId);
+        }
+        super.onSaveInstanceState(outState);
     }
 
     private View findFirstFocusable(View v) {

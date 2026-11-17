@@ -2,11 +2,13 @@
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
+    android:clipChildren="true"
     android:background="#101216">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="match_parent"
+        android:clipChildren="true"
         android:orientation="vertical">
 
         <!-- 顶部：标题 + 入口行（搜索/电影/剧集/榜单/看过） -->
@@ -39,9 +41,12 @@
         <ScrollView
             android:id="@+id/sections_scroll"
             android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:clipChildren="false"
-            android:clipToPadding="false">
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:clipChildren="true"
+            android:clipToPadding="true"
+            android:focusable="false"
+            android:focusableInTouchMode="false">
 
             <LinearLayout
                 android:id="@+id/sections_container"
@@ -62,6 +67,7 @@
         android:layout_height="wrap_content"
         android:layout_gravity="center"
         android:background="@drawable/card_frame"
+        android:focusable="true"
         android:gravity="center"
         android:paddingLeft="28dp"
         android:paddingRight="28dp"
